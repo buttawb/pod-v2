@@ -1,6 +1,22 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  FullscreenControl,
+  GeoJSONSource,
+  Map as MapLibreMap,
+  NavigationControl,
+  setWorkerUrl,
+} from 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
+// MapLibre resolves its worker at runtime from `import.meta.url`, which
+// after bundling points at a file Vite never emitted: the request fell
+// through the SPA rewrite to index.html and failed the module MIME check.
+// `?url` makes Vite emit the worker as a real asset and hand back its
+// hashed path.
+import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
+
+setWorkerUrl(maplibreWorkerUrl);
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { fetchDepotGeoJson, type DepotFeatureCollection } from './api';
 import { BlockSkeleton } from './Skeleton';
 
@@ -11,20 +27,26 @@ const STATUS = [
   { code: 3, label: 'Failed', colour: '#B3231C' },
 ] as const;
 
+const ALL_CODES = STATUS.map((s) => s.code);
+
+/** Same basemap as the driver app: vector tiles, no API key, no request cap. */
+const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
+
 /**
- * The depot's coverage plotted as a scatter of every stop, drawn to a single
- * canvas rather than as thousands of DOM nodes: the same reasoning as the
- * driver app's map, where 5,000 elements is the difference between a usable
- * screen and a frozen one.
+ * The depot's whole coverage on one map.
  *
- * Deliberately no basemap tiles here. The office needs to see where work is
- * concentrated and what has settled; a full tiled map is the driver's tool,
- * and this keeps the dashboard free of another mapping dependency.
+ * Same approach the driver app takes, and for the same reason: one GeoJSON
+ * source rendered by GPU style layers, clustered, with filtering done by
+ * swapping a layer filter expression rather than re-uploading the data.
+ * Thousands of DOM markers is what makes this screen unusable.
  */
 export function DepotMapPage() {
+  const container = useRef<HTMLDivElement>(null);
+  const map = useRef<MapLibreMap | null>(null);
   const [data, setData] = useState<DepotFeatureCollection | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hidden, setHidden] = useState<Set<number>>(new Set());
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     void fetchDepotGeoJson()
@@ -32,56 +54,154 @@ export function DepotMapPage() {
       .catch((err: Error) => setError(err.message));
   }, []);
 
-  const { points, counts, bounds } = useMemo(() => {
-    const features = data?.features ?? [];
+  const counts = useMemo(() => {
     const tally = new Map<number, number>();
-    let minX = Infinity;
-    let maxX = -Infinity;
-    let minY = Infinity;
-    let maxY = -Infinity;
-
-    for (const f of features) {
-      const [lng, lat] = f.geometry.coordinates;
+    for (const f of data?.features ?? []) {
       tally.set(f.properties.s, (tally.get(f.properties.s) ?? 0) + 1);
-      minX = Math.min(minX, lng);
-      maxX = Math.max(maxX, lng);
-      minY = Math.min(minY, lat);
-      maxY = Math.max(maxY, lat);
     }
-    return { points: features, counts: tally, bounds: { minX, maxX, minY, maxY } };
+    return tally;
   }, [data]);
 
-  if (error) return <p className="text-sm text-destructive">{error}</p>;
-  if (!data) return <BlockSkeleton className="h-[32rem]" />;
+  // Build the map once the data is in hand, so the source is set exactly once.
+  useEffect(() => {
+    if (!container.current || !data || map.current) return;
 
-  const width = 1000;
-  const height = 560;
-  const spanX = bounds.maxX - bounds.minX || 1;
-  const spanY = bounds.maxY - bounds.minY || 1;
-  const project = (lng: number, lat: number): [number, number] => [
-    ((lng - bounds.minX) / spanX) * (width - 40) + 20,
-    // Latitude grows upward, screen coordinates grow downward.
-    height - (((lat - bounds.minY) / spanY) * (height - 40) + 20),
-  ];
+    const instance = new MapLibreMap({
+      container: container.current,
+      style: STYLE_URL,
+      center: [-0.1278, 51.5074],
+      zoom: 9.2,
+      attributionControl: { compact: true },
+    });
+    map.current = instance;
+    instance.addControl(new NavigationControl({ showCompass: false }), 'top-right');
+    instance.addControl(new FullscreenControl(), 'top-right');
+
+    instance.on('load', () => {
+      instance.addSource('stops', {
+        type: 'geojson',
+        data: data as GeoJSON.FeatureCollection,
+        cluster: true,
+        clusterRadius: 50,
+        clusterMaxZoom: 13,
+      });
+
+      instance.addLayer({
+        id: 'clusters',
+        type: 'circle',
+        source: 'stops',
+        filter: ['has', 'point_count'],
+        paint: {
+          'circle-color': '#0B5FD6',
+          'circle-opacity': 0.85,
+          'circle-stroke-width': 2,
+          'circle-stroke-color': '#FFFFFF',
+          'circle-radius': ['step', ['get', 'point_count'], 16, 50, 22, 200, 30],
+        },
+      });
+
+      instance.addLayer({
+        id: 'cluster-count',
+        type: 'symbol',
+        source: 'stops',
+        filter: ['has', 'point_count'],
+        layout: {
+          'text-field': ['get', 'point_count_abbreviated'],
+          'text-size': 12,
+          'text-allow-overlap': true,
+        },
+        paint: { 'text-color': '#FFFFFF' },
+      });
+
+      instance.addLayer({
+        id: 'stops-points',
+        type: 'circle',
+        source: 'stops',
+        filter: ['!', ['has', 'point_count']],
+        paint: {
+          // One data-driven expression colours every stop on the GPU.
+          'circle-color': [
+            'match',
+            ['get', 's'],
+            0, STATUS[0].colour,
+            1, STATUS[1].colour,
+            2, STATUS[2].colour,
+            3, STATUS[3].colour,
+            '#64748B',
+          ],
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 9, 3, 14, 6, 17, 9],
+          'circle-stroke-width': 1,
+          'circle-stroke-color': '#FFFFFF',
+        },
+      });
+
+      // Clicking a cluster zooms to where it breaks apart.
+      instance.on('click', 'clusters', (event) => {
+        const feature = instance.queryRenderedFeatures(event.point, { layers: ['clusters'] })[0];
+        const clusterId = feature?.properties?.cluster_id as number | undefined;
+        if (clusterId === undefined) return;
+        const source = instance.getSource('stops') as GeoJSONSource;
+        void source.getClusterExpansionZoom(clusterId).then((zoom) => {
+          instance.easeTo({
+            center: (feature.geometry as GeoJSON.Point).coordinates as [number, number],
+            zoom,
+          });
+        });
+      });
+
+      for (const layer of ['clusters', 'stops-points']) {
+        instance.on('mouseenter', layer, () => {
+          instance.getCanvas().style.cursor = 'pointer';
+        });
+        instance.on('mouseleave', layer, () => {
+          instance.getCanvas().style.cursor = '';
+        });
+      }
+
+      setReady(true);
+    });
+
+    return () => {
+      instance.remove();
+      map.current = null;
+    };
+  }, [data]);
+
+  // Filtering swaps an expression; the 5,000 features are never re-uploaded.
+  useEffect(() => {
+    const instance = map.current;
+    if (!instance || !ready) return;
+    const visible = ALL_CODES.filter((code) => !hidden.has(code));
+    instance.setFilter('stops-points', [
+      'all',
+      ['!', ['has', 'point_count']],
+      ['in', ['get', 's'], ['literal', visible]],
+    ]);
+  }, [hidden, ready]);
+
+  const toggle = useCallback((code: number) => {
+    setHidden((prev) => {
+      const next = new Set(prev);
+      if (next.has(code)) next.delete(code);
+      else next.add(code);
+      return next;
+    });
+  }, []);
+
+  if (error) return <p className="text-sm text-destructive">{error}</p>;
+  if (!data) return <BlockSkeleton className="h-[34rem]" />;
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {STATUS.map((s) => {
           const off = hidden.has(s.code);
           return (
             <button
               key={s.code}
               type="button"
-              onClick={() =>
-                setHidden((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(s.code)) next.delete(s.code);
-                  else next.add(s.code);
-                  return next;
-                })
-              }
-              className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition-opacity ${
+              onClick={() => toggle(s.code)}
+              className={`flex items-center gap-2 rounded-full border bg-background px-3 py-1.5 text-sm transition-opacity ${
                 off ? 'opacity-40' : ''
               }`}
             >
@@ -91,34 +211,21 @@ export function DepotMapPage() {
             </button>
           );
         })}
+        <span className="ml-auto text-sm text-muted-foreground">
+          {data.features.length.toLocaleString()} stops
+        </span>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            {points.length.toLocaleString()} stops in today&apos;s coverage
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <svg
-            viewBox={`0 0 ${width} ${height}`}
-            className="w-full rounded-md bg-muted/30"
-            role="img"
-            aria-label="Depot coverage scatter plot"
-          >
-            {points.map((f) => {
-              if (hidden.has(f.properties.s)) return null;
-              const [x, y] = project(f.geometry.coordinates[0], f.geometry.coordinates[1]);
-              const colour = STATUS.find((s) => s.code === f.properties.s)?.colour ?? '#64748B';
-              return <circle key={f.properties.id} cx={x} cy={y} r={2.2} fill={colour} opacity={0.75} />;
-            })}
-          </svg>
-          <p className="mt-3 text-xs text-muted-foreground">
-            Coordinates and status only. The map payload carries no address, name or driver
-            identity, so an operational view never becomes a movement record.
-          </p>
+      <Card className="overflow-hidden">
+        <CardContent className="p-0">
+          <div ref={container} className="h-[34rem] w-full" />
         </CardContent>
       </Card>
+
+      <p className="text-xs text-muted-foreground">
+        Coordinates and status only. The map payload carries no address, name or driver identity,
+        so an operational view never becomes a movement record.
+      </p>
     </div>
   );
 }

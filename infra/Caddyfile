@@ -16,6 +16,19 @@
 		reverse_proxy backend-1:3000 backend-2:3000
 	}
 
+	# Privacy policy, at a clean public path because it is what the Google
+	# Play listing links to. Play re-checks the URL after launch and enforces
+	# against apps whose policy stops resolving, so it must not fall through
+	# to the SPA below, which would answer with the dashboard's login.
+	handle /privacy /privacy/ {
+		rewrite * /api/privacy
+		reverse_proxy backend-1:3000 backend-2:3000 {
+			lb_policy round_robin
+			health_uri /api/health
+			health_interval 10s
+		}
+	}
+
 	# Office dashboard: static SPA build.
 	handle {
 		root * /srv/dashboard

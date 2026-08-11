@@ -15,6 +15,7 @@ import { AttemptsModule } from './modules/attempts/attempts.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { HealthController } from './modules/health/health.controller';
 import { LegacyModule } from './modules/legacy/legacy.module';
+import { PrivacyController } from './modules/legal/privacy.controller';
 import { MediaModule } from './modules/media/media.module';
 import { OfficeModule } from './modules/office/office.module';
 import { StopsModule } from './modules/stops/stops.module';
@@ -47,7 +48,7 @@ import { SyncModule } from './modules/sync/sync.module';
     OfficeModule,
     AiModule,
   ],
-  controllers: [AppConfigController, HealthController],
+  controllers: [AppConfigController, HealthController, PrivacyController],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: IdentityThrottlerGuard },
