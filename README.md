@@ -2,7 +2,7 @@
 
 Driver Android app + backend + office dashboard for capturing trustworthy proof-of-delivery evidence, extending a live v1 system without breaking its clients.
 
-> Stub — final README (setup + architecture, under one page) written at ship time.
+> Stub - final README (setup + architecture, under one page) written at ship time.
 
 ## Layout
 

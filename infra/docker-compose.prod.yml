@@ -1,6 +1,6 @@
 # Production stack: Caddy load-balancing across two backend instances.
 # The brief says "assume it runs behind a load balancer with more than one
-# instance" — so we actually run two: idempotency and SSE fan-out are
+# instance" - so we actually run two: idempotency and SSE fan-out are
 # exercised across instances, not just designed for it.
 services:
   postgres:
@@ -10,8 +10,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
+      POD_APP_PASSWORD: ${POD_APP_PASSWORD}
     volumes:
       - pod_pg:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s

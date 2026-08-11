@@ -1,6 +1,6 @@
 # DECISIONS.md
 
-> Draft — sections filled as each slice lands; final pass trims to <= 1,500 words.
+> Draft - sections filled as each slice lands; final pass trims to <= 1,500 words.
 
 ## Data model
 
@@ -20,7 +20,7 @@
 
 ## Performance (depot map)
 
-(TBD — measured numbers, before/after, what changed)
+(TBD - measured numbers, before/after, what changed)
 
 ## What breaks at 100x, and what I'd fix first
 
@@ -36,4 +36,4 @@
 
 ## AI tooling
 
-(TBD — where I leaned on it, where I overrode it)
+(TBD - where I leaned on it, where I overrode it)
