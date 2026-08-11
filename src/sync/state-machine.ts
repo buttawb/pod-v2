@@ -46,7 +46,10 @@ export type FailureKind = (typeof FailureKind)[keyof typeof FailureKind];
 
 const LEGAL_TRANSITIONS: Record<SyncState, SyncState[]> = {
   [SyncState.Draft]: [SyncState.Queued],
-  [SyncState.Queued]: [SyncState.Submitting],
+  // Queued can park directly: the pre-flight check for missing evidence
+  // files runs before anything is sent, and its verdict has to be able to
+  // reach the driver rather than silently failing to apply.
+  [SyncState.Queued]: [SyncState.Submitting, SyncState.NeedsAttention],
   [SyncState.Submitting]: [
     SyncState.AttemptAcked,
     SyncState.Queued, // retryable failure, backoff scheduled

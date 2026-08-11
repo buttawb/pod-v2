@@ -1,4 +1,5 @@
 import { Directory, File, Paths } from 'expo-file-system';
+import { stripExif } from './exif';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 
@@ -37,14 +38,21 @@ export async function capturePhoto(
     // ~300-600KB per photo keeps 150 stops x 4 photos plausible on a rural
     // connection and on a handset that is already low on storage.
     quality: 0.6,
-    exif: false, // GPS is captured deliberately in typed columns, not smuggled in metadata
+    // Suppresses the returned metadata object only; the file itself is
+    // stripped below, because that is what actually gets uploaded.
+    exif: false,
   });
   if (result.canceled || result.assets.length === 0) return null;
 
   const source = new File(result.assets[0].uri);
   const target = new File(evidenceDir(), `${clientAttemptId}-${photoIndex}.jpg`);
   if (target.exists) target.delete();
-  source.move(target);
+
+  // Rewrite rather than move: location must not travel inside image
+  // metadata, where no retention or access rule can reach it.
+  target.create();
+  target.write(stripExif(source.bytesSync()));
+  if (source.exists) source.delete();
 
   if (!target.exists) throw new Error('Could not save the photo to this device');
   return { localPath: target.uri, byteSize: target.size ?? 0 };

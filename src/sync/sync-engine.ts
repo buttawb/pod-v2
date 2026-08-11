@@ -21,6 +21,7 @@ import {
   FailureKind,
   PhotoUploadState,
   SyncState,
+  WORKABLE_STATES,
 } from './state-machine';
 
 interface UploadTarget {
@@ -45,6 +46,8 @@ interface FinalizeResponse {
 
 const PARALLEL_UPLOADS = 2;
 const HEARTBEAT_MS = 60_000;
+/** submit -> upload -> finalize, with slack. A bound, not a schedule. */
+const MAX_PHASES_PER_ATTEMPT = 4;
 
 type Listener = () => void;
 
@@ -118,7 +121,16 @@ class SyncEngine {
         touched.add(attempt.client_attempt_id);
 
         try {
-          await this.processAttempt(attempt);
+          // Drive this attempt through as many phases as it will go: submit,
+          // upload, finalize. Stopping after one phase would leave a fresh
+          // capture waiting for the next trigger before its photos moved.
+          let current: AttemptRow | null = attempt;
+          for (let phase = 0; phase < MAX_PHASES_PER_ATTEMPT && current; phase += 1) {
+            const progressed = await this.processAttempt(current);
+            if (!progressed) break;
+            current = await getAttempt(attempt.client_attempt_id);
+            if (!current || !WORKABLE_STATES.includes(current.sync_state)) break;
+          }
         } catch (err) {
           // An unexpected throw must become a visible, driver-actionable
           // row, never a silent stall of the entire queue.
@@ -341,11 +353,17 @@ class SyncEngine {
     switch (classifyFailure(signal)) {
       case FailureClass.Offline:
       case FailureClass.AuthRefresh:
-      case FailureClass.RefreshUrls:
-        // Nothing was really attempted, or it is fixable without the driver.
-        // Leave the attempt workable and burn no retry budget; only the
-        // in-flight `submitting` state needs releasing so it is re-claimed.
+        // Nothing was really attempted. Leave the attempt workable and burn
+        // no retry budget; only the in-flight `submitting` state needs
+        // releasing so the worker can claim it again.
         await releaseForRetry(attempt.client_attempt_id, code, message);
+        break;
+
+      case FailureClass.RefreshUrls:
+        // An expired presign is fixable by re-requesting URLs, but a
+        // persistently rejected one is a real failure: it goes on the retry
+        // budget so it escalates to the driver instead of spinning forever.
+        await scheduleRetry(attempt.client_attempt_id, code, message);
         break;
 
       case FailureClass.Permanent:
