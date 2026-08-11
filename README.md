@@ -57,24 +57,38 @@ npx expo prebuild --platform android
 cd android && ./gradlew assembleRelease   # APK, for sideloading
 ```
 
-Release signing reads `~/.pod-v2-signing/keystore.properties`; without it the
-build falls back to debug signing, so a clean checkout still compiles. **Back
-that keystore up**: the fallback means a machine without it produces an
-installable but wrongly-signed artifact with no error.
+Release signing reads `~/.pod-v2-signing/keystore.properties`. Without it a
+normal build falls back to debug signing so a clean checkout still compiles;
+a **store** build fails instead of guessing (see below). **Back that keystore
+up**: Play binds the upload key on first accepted upload and it cannot be
+changed afterwards.
 
 ### For a Google Play release
 
-Play requires an App Bundle, not an APK, and the store build should not carry
-the development launcher:
+Play requires an App Bundle, not an APK, and the store build must not carry
+the development launcher. Both differences are driven by flags, not by
+editing config:
 
 ```bash
-# remove "expo-dev-client" from expo.plugins in app.json first
-npx expo prebuild --platform android --clean
-cd android && ./gradlew bundleRelease     # -> app/build/outputs/bundle/release
+POD_V2_STORE_BUILD=1 npx expo prebuild --platform android --clean
+cd android && ./gradlew bundleRelease -PpodStoreBuild=true
 ```
 
-Keep the npm dependency: only the plugin entry needs to go, and only for the
-uploaded build.
+`POD_V2_STORE_BUILD=1` makes `app.config.js` drop the `expo-dev-client`
+plugin (the npm dependency stays; only the plugin entry goes, and only for
+the uploaded build). `-PpodStoreBuild=true` makes a missing keystore a build
+failure rather than a silent debug-signed bundle.
+
+The bundle lands in `android/app/build/outputs/bundle/release/`. Verify it
+before uploading:
+
+```bash
+keytool -printcert -jarfile app-release.aab | grep -E "Owner|SHA256"
+unzip -p app-release.aab base/manifest/AndroidManifest.xml | strings | grep -i "RECORD_AUDIO\|ALERT_WINDOW\|devlauncher"
+```
+
+The first must show `CN=PoD v2`, not `CN=Android Debug`. The second must
+print nothing.
 
 `app.json` blocks four permissions Expo's manifest template adds that nothing
 here uses (`SYSTEM_ALERT_WINDOW`, `VIBRATE`, and the two external-storage

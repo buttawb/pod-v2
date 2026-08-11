@@ -1,7 +1,22 @@
 import { compareSemver, gateLevel, GateLevel } from './version-gate';
+import { APP_VERSION } from '../config';
 
-// The app build under test.
-const APP_VERSION = '2.0.0';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const appJson = require('../../app.json');
+
+/**
+ * The gate compares APP_VERSION against the server's X-Min-App-Version, while
+ * the store compares app.json's version. If the two literals drift, the server
+ * gates on a number the build does not actually carry: healthy builds get
+ * blocked, or stale ones keep capturing evidence. The rule was previously
+ * prose in the README, and this file redeclared the version locally, so a
+ * one-sided bump left the suite green.
+ */
+describe('version parity', () => {
+  it('keeps APP_VERSION and app.json in step', () => {
+    expect(APP_VERSION).toBe(appJson.expo.version);
+  });
+});
 
 const state = (over: Partial<Parameters<typeof gateLevel>[0]> = {}) => ({
   minAppVersion: null,

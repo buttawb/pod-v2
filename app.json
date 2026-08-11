@@ -9,6 +9,7 @@
     "android": {
       "package": "com.podv2.driver",
       "versionCode": 200,
+      "allowBackup": false,
       "adaptiveIcon": {
         "backgroundColor": "#FFFFFF",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -24,6 +25,7 @@
         "android.permission.ACCESS_NETWORK_STATE"
       ],
       "blockedPermissions": [
+        "android.permission.RECORD_AUDIO",
         "android.permission.SYSTEM_ALERT_WINDOW",
         "android.permission.VIBRATE",
         "android.permission.READ_EXTERNAL_STORAGE",
