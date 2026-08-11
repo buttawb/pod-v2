@@ -10,38 +10,13 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import {
-  clearSession,
-  fetchAttempts,
-  fetchStats,
-  openFeed,
-  type AttemptRow,
-  type OfficeSession,
-  type TodayStats,
-} from './api';
+import { fetchAttempts, fetchStats, openFeed, type AttemptRow, type TodayStats } from './api';
 import { SummaryDialog } from './SummaryDialog';
+import { DELIVERED_OUTCOMES as DELIVERED, OUTCOME_LABELS } from './outcomes';
 
-const OUTCOME_LABELS: Record<string, string> = {
-  delivered_to_person: 'Delivered to person',
-  left_with_neighbour: 'Left with neighbour',
-  left_safe_place: 'Left in safe place',
-  no_answer_carded: 'No answer / carded',
-  refused: 'Refused',
-  access_failure: 'Access failure',
-};
-
-const DELIVERED = new Set(['delivered_to_person', 'left_with_neighbour', 'left_safe_place']);
-
-export function LiveStatusPage({
-  session,
-  onSignOut,
-}: {
-  session: OfficeSession;
-  onSignOut: () => void;
-}) {
+export function LiveStatusPage({ onLiveEvent }: { onLiveEvent: (count: number) => void }) {
   const [stats, setStats] = useState<TodayStats | null>(null);
   const [attempts, setAttempts] = useState<AttemptRow[]>([]);
-  const [liveCount, setLiveCount] = useState(0);
   const [selected, setSelected] = useState<AttemptRow | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -63,11 +38,13 @@ export function LiveStatusPage({
   useEffect(() => {
     // The feed is a doorbell: on an event we refresh from the table, which
     // stays the single source of truth for what the office sees.
+    let received = 0;
     return openFeed(() => {
-      setLiveCount((n) => n + 1);
+      received += 1;
+      onLiveEvent(received);
       void load();
     });
-  }, [load]);
+  }, [load, onLiveEvent]);
 
   const tiles = useMemo(
     () => [
@@ -86,29 +63,7 @@ export function LiveStatusPage({
   );
 
   return (
-    <div className="min-h-screen bg-muted/40">
-      <header className="flex items-center justify-between border-b bg-background px-6 py-4">
-        <div>
-          <h1 className="text-xl font-semibold">Live delivery status</h1>
-          <p className="text-sm text-muted-foreground">
-            {liveCount > 0 ? `${liveCount} live update${liveCount > 1 ? 's' : ''} received` : 'Connected'}
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-muted-foreground">{session.user.displayName}</span>
-          <Button
-            variant="outline"
-            onClick={() => {
-              clearSession();
-              onSignOut();
-            }}
-          >
-            Sign out
-          </Button>
-        </div>
-      </header>
-
-      <main className="flex flex-col gap-6 p-6">
+    <div className="flex flex-col gap-6">
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
           {tiles.map((tile) => (
             <Card key={tile.label}>
@@ -186,7 +141,6 @@ export function LiveStatusPage({
             </Table>
           </CardContent>
         </Card>
-      </main>
 
       {selected ? (
         <SummaryDialog

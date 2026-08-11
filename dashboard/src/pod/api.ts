@@ -104,12 +104,14 @@ export interface AttemptRow {
   sent_at: string | null;
 }
 
-export async function fetchAttempts(cursor?: string): Promise<{
-  attempts: AttemptRow[];
-  nextCursor: string | null;
-  hasMore: boolean;
-}> {
-  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+export async function fetchAttempts(
+  cursor?: string,
+  outcome?: string,
+): Promise<{ attempts: AttemptRow[]; nextCursor: string | null; hasMore: boolean }> {
+  const params = new URLSearchParams();
+  if (cursor) params.set('cursor', cursor);
+  if (outcome) params.set('status', outcome);
+  const query = params.toString() ? `?${params.toString()}` : '';
   const response = await authedFetch(`/api/v2/office/attempts${query}`);
   if (!response.ok) throw new Error('Could not load attempts');
   return (await response.json()) as {

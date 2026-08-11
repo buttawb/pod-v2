@@ -22,7 +22,8 @@
     "migration:run": "npm run typeorm -- migration:run",
     "migration:revert": "npm run typeorm -- migration:revert",
     "seed": "ts-node -r dotenv/config src/database/seeds/seed.ts",
-    "backfill:pods": "ts-node -r dotenv/config scripts/backfill-pods.ts"
+    "backfill:pods": "ts-node -r dotenv/config scripts/backfill-pods.ts",
+    "reset:demo": "ts-node -r dotenv/config scripts/reset-demo-data.ts"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1107.0",
