@@ -13,6 +13,7 @@ import {
 import { fetchAttempts, type AttemptRow } from './api';
 import { SummaryDialog } from './SummaryDialog';
 import { DELIVERED_OUTCOMES, OUTCOME_LABELS } from './outcomes';
+import { TableSkeleton } from './Skeleton';
 
 const FILTERS: Array<{ value: string | null; label: string }> = [
   { value: null, label: 'All' },
@@ -68,6 +69,7 @@ export function AttemptsPage() {
 
       <Card>
         <CardContent className="pt-6">
+          {loading && attempts.length === 0 ? <TableSkeleton cols={7} /> : null}
           <Table>
             <TableHeader>
               <TableRow>

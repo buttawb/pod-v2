@@ -4,6 +4,8 @@ import { Toaster } from '@/components/ui/sonner';
 import { LoginPage } from '@/pod/LoginPage';
 import { LiveStatusPage } from '@/pod/LiveStatusPage';
 import { AttemptsPage } from '@/pod/AttemptsPage';
+import { DepotMapPage } from '@/pod/DepotMapPage';
+import { RolloutPage } from '@/pod/RolloutPage';
 import { AppShell, type Page } from '@/pod/AppShell';
 import { getStoredSession, type OfficeSession } from '@/pod/api';
 
@@ -36,7 +38,15 @@ export function App() {
           onSignOut={() => setSession(null)}
           liveCount={liveCount}
         >
-          {page === 'live' ? <LiveStatusPage onLiveEvent={setLiveCount} /> : <AttemptsPage />}
+          {page === 'live' ? (
+            <LiveStatusPage onLiveEvent={setLiveCount} />
+          ) : page === 'attempts' ? (
+            <AttemptsPage />
+          ) : page === 'map' ? (
+            <DepotMapPage />
+          ) : (
+            <RolloutPage />
+          )}
         </AppShell>
       ) : (
         <LoginPage onSignedIn={setSession} />

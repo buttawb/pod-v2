@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { clearSession, type OfficeSession } from './api';
 
-export type Page = 'live' | 'attempts';
+export type Page = 'live' | 'attempts' | 'map' | 'rollout';
 
 const NAV: Array<{ id: Page; label: string; hint: string; icon: ReactNode }> = [
   {
@@ -23,6 +23,28 @@ const NAV: Array<{ id: Page; label: string; hint: string; icon: ReactNode }> = [
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="size-5">
         <rect x="4" y="3" width="16" height="18" rx="2" />
         <path d="M8 8h8M8 12h8M8 16h5" strokeLinecap="round" />
+      </svg>
+    ),
+  },
+  {
+    id: 'map',
+    label: 'Depot map',
+    hint: "Every stop in today's coverage",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="size-5">
+        <path d="M9 3 3 6v15l6-3 6 3 6-3V3l-6 3-6-3Z" strokeLinejoin="round" />
+        <path d="M9 3v15M15 6v15" />
+      </svg>
+    ),
+  },
+  {
+    id: 'rollout',
+    label: 'Rollout',
+    hint: 'App version policy in force',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="size-5">
+        <path d="M12 3v12M8 11l4 4 4-4" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" strokeLinecap="round" />
       </svg>
     ),
   },
@@ -49,8 +71,8 @@ export function AppShell({
   children: ReactNode;
 }) {
   return (
-    <div className="flex min-h-screen w-full grow bg-muted/40">
-      <aside className="hidden w-64 shrink-0 flex-col border-r bg-background md:flex">
+    <div className="flex h-screen w-full grow overflow-hidden bg-muted/40">
+      <aside className="hidden h-full w-64 shrink-0 flex-col overflow-y-auto border-r bg-background md:flex">
         <div className="flex h-16 items-center gap-2 border-b px-5">
           <span className="flex size-8 items-center justify-center rounded-md bg-primary text-sm font-bold text-primary-foreground">
             PD
@@ -105,18 +127,15 @@ export function AppShell({
         </div>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-16 items-center justify-between border-b bg-background px-6">
+      <div className="flex h-full min-w-0 flex-1 flex-col">
+        <header className="flex h-16 shrink-0 items-center justify-between border-b bg-background px-6">
           <div>
             <h1 className="text-lg font-semibold">
               {NAV.find((n) => n.id === page)?.label}
             </h1>
             <p className="text-xs text-muted-foreground">
-              {page === 'live'
-                ? liveCount > 0
-                  ? `${liveCount} live update${liveCount > 1 ? 's' : ''} received`
-                  : 'Connected to the live feed'
-                : 'Newest first, paged by keyset cursor'}
+              {NAV.find((n) => n.id === page)?.hint}
+              {page === 'live' && liveCount > 0 ? ` - ${liveCount} live update${liveCount > 1 ? 's' : ''}` : ''}
             </p>
           </div>
 
@@ -140,7 +159,7 @@ export function AppShell({
           </span>
         </header>
 
-        <main className="flex-1 p-6">{children}</main>
+        <main className="flex-1 overflow-y-auto p-6">{children}</main>
       </div>
     </div>
   );

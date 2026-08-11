@@ -190,3 +190,32 @@ export function openFeed(onEvent: (event: AttemptEvent) => void): () => void {
 
   return () => source.close();
 }
+
+export interface VersionPolicy {
+  minAppVersion: string;
+  latestAppVersion: string;
+  blockedVersions: string[];
+  updateUrl: string | null;
+  policy: { graceHours: number; blockNewCapturesInGrace: boolean; uploadAlwaysAllowed: boolean };
+}
+
+export async function fetchConfig(): Promise<VersionPolicy> {
+  const response = await fetch(`${API_BASE}/api/config`);
+  if (!response.ok) throw new Error('Could not load the version policy');
+  return (await response.json()) as VersionPolicy;
+}
+
+export interface DepotFeatureCollection {
+  type: 'FeatureCollection';
+  features: Array<{
+    type: 'Feature';
+    geometry: { type: 'Point'; coordinates: [number, number] };
+    properties: { id: string; s: number; q: number };
+  }>;
+}
+
+export async function fetchDepotGeoJson(): Promise<DepotFeatureCollection> {
+  const response = await authedFetch('/api/v2/depot/stops.geojson');
+  if (!response.ok) throw new Error('Could not load the depot map');
+  return (await response.json()) as DepotFeatureCollection;
+}

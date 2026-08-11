@@ -13,6 +13,7 @@ import {
 import { fetchAttempts, fetchStats, openFeed, type AttemptRow, type TodayStats } from './api';
 import { SummaryDialog } from './SummaryDialog';
 import { DELIVERED_OUTCOMES as DELIVERED, OUTCOME_LABELS } from './outcomes';
+import { TableSkeleton, TilesSkeleton } from './Skeleton';
 
 export function LiveStatusPage({ onLiveEvent }: { onLiveEvent: (count: number) => void }) {
   const [stats, setStats] = useState<TodayStats | null>(null);
@@ -38,12 +39,23 @@ export function LiveStatusPage({ onLiveEvent }: { onLiveEvent: (count: number) =
   useEffect(() => {
     // The feed is a doorbell: on an event we refresh from the table, which
     // stays the single source of truth for what the office sees.
+    //
+    // Coalesced deliberately. A reconnect replays every event since the last
+    // one seen, and refetching per event turned a 200-event catch-up into
+    // 200 round trips - the page appeared to hang on open. One refresh per
+    // burst is all the office needs.
     let received = 0;
-    return openFeed(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const unsubscribe = openFeed(() => {
       received += 1;
       onLiveEvent(received);
-      void load();
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => void load(), 400);
     });
+    return () => {
+      if (timer) clearTimeout(timer);
+      unsubscribe();
+    };
   }, [load, onLiveEvent]);
 
   const tiles = useMemo(
@@ -61,6 +73,22 @@ export function LiveStatusPage({ onLiveEvent }: { onLiveEvent: (count: number) =
     ],
     [stats],
   );
+
+  if (!stats) {
+    return (
+      <div className="flex flex-col gap-6">
+        <TilesSkeleton />
+        <Card>
+          <CardHeader>
+            <CardTitle>Recent attempts</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <TableSkeleton />
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-6">
