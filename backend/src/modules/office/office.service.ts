@@ -59,7 +59,8 @@ export class OfficeService {
       id: '00000000-0000-0000-0000-000000000000',
     };
     const rows = (await this.dataSource.query(
-      `SELECT id, stop_id, driver_id, outcome, evidence_status, received_at
+      `SELECT id, stop_id, driver_id, outcome, evidence_status, received_at,
+              received_at::text AS cursor_ts
        FROM delivery_attempts
        WHERE (received_at, id) > ($1::timestamptz, $2::uuid)
        ORDER BY received_at ASC, id ASC
@@ -72,10 +73,11 @@ export class OfficeService {
       outcome: string;
       evidence_status: string;
       received_at: Date;
+      cursor_ts: string;
     }>;
 
     return rows.map((r) => ({
-      id: encodeCursor({ ts: new Date(r.received_at).toISOString(), id: r.id }),
+      id: encodeCursor({ ts: r.cursor_ts, id: r.id }),
       type: 'attempt',
       data: {
         attemptId: r.id,
@@ -94,7 +96,7 @@ export class OfficeService {
     // omitted entirely rather than faked.
     const rows = (await this.dataSource.query(
       `SELECT a.id, a.stop_id, a.outcome, a.evidence_status, a.note, a.captured_at,
-              a.received_at, a.source, a.app_version,
+              a.received_at, a.received_at::text AS cursor_ts, a.source, a.app_version,
               s.address, s.postcode, s.sequence,
               d.display_name AS driver_name,
               ai.status AS ai_status, ai.draft_text, ai.final_text, ai.source AS ai_source,
@@ -108,14 +110,16 @@ export class OfficeService {
        ORDER BY a.received_at DESC, a.id DESC
        LIMIT ${LIST_PAGE_SIZE}`,
       [cursor?.ts ?? null, cursor?.id ?? null, status ?? null],
-    )) as Array<{ id: string; received_at: Date }>;
+    )) as Array<{ id: string; cursor_ts: string }>;
 
+    // The cursor carries Postgres's own text timestamp. A JavaScript Date
+    // round-trip truncates to milliseconds, and rows inside the same
+    // millisecond would then be skipped or repeated between pages - which
+    // is disqualifying when the office is paging through evidence.
     const last = rows[rows.length - 1];
     return {
-      attempts: rows,
-      nextCursor: last
-        ? encodeCursor({ ts: new Date(last.received_at).toISOString(), id: last.id })
-        : null,
+      attempts: rows.map(({ cursor_ts: _drop, ...rest }) => rest),
+      nextCursor: last ? encodeCursor({ ts: last.cursor_ts, id: last.id }) : null,
       hasMore: rows.length === LIST_PAGE_SIZE,
     };
   }

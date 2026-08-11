@@ -110,8 +110,62 @@ describe('v1 legacy contract (e2e)', () => {
       [stopId, note],
     )) as Array<{ source: string; outcome: string; raw_payload: Record<string, unknown> }>;
     expect(attempts).toHaveLength(1);
-    expect(attempts[0].outcome).toBe('delivered_to_person');
+    // v1 sent a photo but no signature, so the attempt is recorded as what
+    // the evidence actually supports rather than claiming a signature that
+    // was never captured.
+    expect(attempts[0].outcome).toBe('left_safe_place');
     expect(attempts[0].raw_payload.note).toBe(note);
+  });
+
+  it('maps the v1 boolean to the outcome its evidence actually supports', async () => {
+    const stops = await request(app.getHttpServer())
+      .get('/api/v2/stops')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{ delivered: true, signature_url: 'https://legacy-cdn.example.com/s.png' }, 'delivered_to_person'],
+      [{ delivered: true, photo_url: 'https://legacy-cdn.example.com/p.jpg' }, 'left_safe_place'],
+      [{ delivered: false }, 'no_answer_carded'],
+    ];
+
+    for (const [index, [body, expected]] of cases.entries()) {
+      const stopId = stops.body.stops[20 + index].id as string;
+      const note = `mapping ${randomUUID()}`;
+      await request(app.getHttpServer())
+        .post(`/api/stops/${stopId}/pod`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ ...body, location: '51.5,-0.1', note })
+        .expect(201);
+
+      const rows = (await dataSource.query(
+        `SELECT outcome, evidence_status FROM delivery_attempts WHERE note = $1`,
+        [note],
+      )) as Array<{ outcome: string; evidence_status: string }>;
+      expect(rows).toHaveLength(1);
+      expect(rows[0].outcome).toBe(expected);
+    }
+  });
+
+  it('does not claim complete evidence for a v1 payload that carried none', async () => {
+    const stops = await request(app.getHttpServer())
+      .get('/api/v2/stops')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+    const stopId = stops.body.stops[25].id as string;
+    const note = `no evidence ${randomUUID()}`;
+
+    await request(app.getHttpServer())
+      .post(`/api/stops/${stopId}/pod`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ delivered: true, location: '51.5,-0.1', note })
+      .expect(201);
+
+    const rows = (await dataSource.query(
+      `SELECT evidence_status FROM delivery_attempts WHERE note = $1`,
+      [note],
+    )) as Array<{ evidence_status: string }>;
+    expect(rows[0].evidence_status).not.toBe('complete');
   });
 
   it('an identical v1 retry does not create a second attempt (derived idempotency)', async () => {

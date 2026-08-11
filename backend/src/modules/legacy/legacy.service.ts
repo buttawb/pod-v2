@@ -86,7 +86,18 @@ export class LegacyService {
     if (!stop) throw new NotFoundException('Unknown stop');
     if (stop.driverId !== user.sub) throw new ForbiddenException('Stop belongs to another driver');
 
-    const outcome: Outcome = body.delivered ? Outcome.DeliveredToPerson : Outcome.NoAnswerCarded;
+    // v1 has one boolean where v2 has six outcomes, so the mapping is driven
+    // by the evidence v1 actually supplied rather than assuming the richest
+    // one. Claiming delivered_to_person for a payload with no signature
+    // would put rows in the evidence table that contradict the matrix every
+    // other writer obeys.
+    const outcome: Outcome = !body.delivered
+      ? Outcome.NoAnswerCarded
+      : body.signature_url
+        ? Outcome.DeliveredToPerson
+        : body.photo_url
+          ? Outcome.LeftSafePlace
+          : Outcome.DeliveredToPerson;
     const rawPayload = {
       delivered: body.delivered,
       photo_url: body.photo_url ?? null,
@@ -119,7 +130,7 @@ export class LegacyService {
            client_attempt_id, stop_id, driver_id, outcome, note, lat, lng,
            captured_at, app_version, source, raw_payload,
            declared_photo_count, evidence_status, payload_hash
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,now(),$8,'v1_compat',$9,0,'complete',$10)
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,now(),$8,'v1_compat',$9,0,$10,$11)
          ON CONFLICT (client_attempt_id) DO NOTHING
          RETURNING id`,
         [
@@ -132,6 +143,11 @@ export class LegacyService {
           coords.lng,
           LEGACY_APP_VERSION,
           JSON.stringify(rawPayload),
+          // v1 hosts its own media, so this API is never owed an upload:
+          // 'complete' means nothing outstanding, not that the v2 evidence
+          // matrix was satisfied. A payload that carried no evidence at all
+          // is marked as such rather than dressed up as complete.
+          body.photo_url || body.signature_url ? 'complete' : 'incomplete_expired',
           payloadHash,
         ],
       )) as Array<{ id: string }>;
@@ -148,7 +164,7 @@ export class LegacyService {
         stopId,
         driverId: user.sub,
         outcome,
-        evidenceStatus: 'complete',
+        evidenceStatus: body.photo_url || body.signature_url ? 'complete' : 'incomplete_expired',
         receivedAt: new Date().toISOString(),
       });
     });

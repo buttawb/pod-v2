@@ -43,6 +43,10 @@ export class DeliveryAttempt {
   @Column({ name: 'signature_size_bytes', type: 'bigint', nullable: true })
   signatureSizeBytes!: string | null;
 
+  /** What the client said it would upload; needed to re-sign a PUT later. */
+  @Column({ name: 'signature_declared_size_bytes', type: 'bigint', nullable: true })
+  signatureDeclaredSizeBytes!: string | null;
+
   @Column({ name: 'neighbour_house_number', type: 'text', nullable: true })
   neighbourHouseNumber!: string | null;
 

@@ -86,10 +86,11 @@ export class AttemptsService {
       const inserted = (await em.query(
         `INSERT INTO delivery_attempts (
            client_attempt_id, stop_id, driver_id, device_id, parcel_barcode, barcode_source,
-           outcome, signature_s3_key, neighbour_house_number, reason_code, note,
+           outcome, signature_s3_key, signature_declared_size_bytes,
+           neighbour_house_number, reason_code, note,
            lat, lng, gps_accuracy_m, captured_at, clock_suspect, app_version,
            source, declared_photo_count, evidence_status, payload_hash
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'v2',$18,$19,$20)
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'v2',$19,$20,$21)
          ON CONFLICT (client_attempt_id) DO NOTHING
          RETURNING id`,
         [
@@ -101,6 +102,7 @@ export class AttemptsService {
           dto.parcelBarcode ? (dto.barcodeSource ?? 'manual') : null,
           dto.outcome,
           dto.signature ? this.signatureKey(dto.clientAttemptId) : null,
+          dto.signature ? String(dto.signature.sizeBytes) : null,
           dto.neighbourHouseNumber ?? null,
           dto.reasonCode ?? null,
           dto.note ?? null,
@@ -335,19 +337,23 @@ export class AttemptsService {
     }
 
     if (attempt.signatureS3Key && !attempt.signatureVerifiedAt) {
+      // The size the client declared, never a guess: Content-Length is part
+      // of the signature, so a wrong value means S3 rejects every upload.
       const declaredSize =
         dto?.signature?.sizeBytes ??
-        (attempt.signatureSizeBytes ? Number(attempt.signatureSizeBytes) : null);
-      uploads.push({
-        kind: 'signature',
-        s3Key: attempt.signatureS3Key,
-        url: await this.s3.presignPut(
-          attempt.signatureS3Key,
-          'image/png',
-          declaredSize ?? 512 * 1024,
-        ),
-        expiresInSec: putTtl,
-      });
+        (attempt.signatureDeclaredSizeBytes ? Number(attempt.signatureDeclaredSizeBytes) : null);
+      if (declaredSize === null) {
+        this.logger.error(
+          `No declared signature size for ${attempt.clientAttemptId}; cannot presign`,
+        );
+      } else {
+        uploads.push({
+          kind: 'signature',
+          s3Key: attempt.signatureS3Key,
+          url: await this.s3.presignPut(attempt.signatureS3Key, 'image/png', declaredSize),
+          expiresInSec: putTtl,
+        });
+      }
     }
 
     return uploads;

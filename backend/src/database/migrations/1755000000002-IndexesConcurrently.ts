@@ -10,6 +10,28 @@ export class IndexesConcurrently1755000000002 implements MigrationInterface {
   name = 'IndexesConcurrently1755000000002';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
+    // CREATE INDEX CONCURRENTLY can fail part-way and leave an INVALID
+    // index behind. IF NOT EXISTS would then happily adopt it, and an
+    // invalid unique index enforces nothing - the idempotency guarantee
+    // would be silently gone while every migration reported success. So any
+    // invalid leftovers are dropped first.
+    await queryRunner.query(`
+      DO $$
+      DECLARE bad record;
+      BEGIN
+        FOR bad IN
+          SELECT c.relname
+          FROM pg_index i
+          JOIN pg_class c ON c.oid = i.indexrelid
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE NOT i.indisvalid AND n.nspname = current_schema()
+        LOOP
+          EXECUTE format('DROP INDEX IF EXISTS %I', bad.relname);
+          RAISE NOTICE 'dropped invalid index %', bad.relname;
+        END LOOP;
+      END $$;
+    `);
+
     // Idempotency arbiter - THE serialization point across LB instances.
     await queryRunner.query(`
       CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS uq_attempts_client_attempt_id
@@ -59,6 +81,21 @@ export class IndexesConcurrently1755000000002 implements MigrationInterface {
     `);
 
     // Legacy read path: pods.stop_id already has a unique index from v1.
+
+    // Fail loudly if anything above still ended up invalid: a migration that
+    // reports success while the idempotency arbiter is unenforced is worse
+    // than one that stops the deploy.
+    const invalid = (await queryRunner.query(`
+      SELECT c.relname FROM pg_index i
+      JOIN pg_class c ON c.oid = i.indexrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE NOT i.indisvalid AND n.nspname = current_schema()
+    `)) as Array<{ relname: string }>;
+    if (invalid.length > 0) {
+      throw new Error(
+        `Invalid indexes after creation: ${invalid.map((r) => r.relname).join(', ')}`,
+      );
+    }
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
