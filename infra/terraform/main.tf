@@ -35,10 +35,15 @@ module "storage" {
   apk_bucket_name      = "pod-v2-apk-${data.aws_caller_identity.current.account_id}"
 }
 
+module "secrets" {
+  source = "./modules/secrets"
+}
+
 module "iam" {
   source = "./modules/iam"
 
   evidence_bucket_arn = module.storage.evidence_bucket_arn
+  runtime_secret_arn  = module.secrets.secret_arn
 }
 
 module "compute" {

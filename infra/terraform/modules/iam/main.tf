@@ -1,4 +1,5 @@
 variable "evidence_bucket_arn" { type = string }
+variable "runtime_secret_arn" { type = string }
 
 data "aws_iam_policy_document" "assume_ec2" {
   statement {
@@ -27,6 +28,12 @@ data "aws_iam_policy_document" "backend" {
       "s3:HeadObject",
     ]
     resources = ["${var.evidence_bucket_arn}/attempts/*"]
+  }
+
+  statement {
+    sid       = "ReadRuntimeSecret"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [var.runtime_secret_arn]
   }
 
   statement {

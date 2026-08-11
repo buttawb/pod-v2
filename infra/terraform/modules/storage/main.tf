@@ -95,6 +95,18 @@ resource "aws_s3_bucket_lifecycle_configuration" "evidence" {
       days          = 90
       storage_class = "GLACIER_IR"
     }
+
+    # 18-month retention, enforced declaratively so it holds even if the
+    # application-side redaction job never runs. Versions are expired too:
+    # a versioned bucket that only deletes current objects retains the
+    # evidence forever behind a delete marker.
+    expiration {
+      days = 550
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
   }
 }
 

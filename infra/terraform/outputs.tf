@@ -19,3 +19,8 @@ output "apk_public_url_base" {
 output "loadtest_public_ip" {
   value = var.enable_loadtest_runner ? module.loadtest[0].public_ip : null
 }
+
+output "runtime_secret_name" {
+  value       = module.secrets.secret_name
+  description = "Secrets Manager entry the instance reads at boot"
+}

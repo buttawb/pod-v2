@@ -25,6 +25,9 @@ infra/terraform/*.tfstate.*
 infra/terraform/*.tfvars
 !infra/terraform/example.tfvars
 infra/terraform/.terraform.lock.hcl
+# Plan files embed account IDs, ARNs, operator IPs and public keys
+infra/terraform/tfplan
+infra/terraform/*.tfplan
 
 # Logs & OS noise
 *.log

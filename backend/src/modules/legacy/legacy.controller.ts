@@ -8,7 +8,7 @@ import { LegacyService } from './legacy.service';
 /**
  * FROZEN v1 surface - /api/stops and /api/stops/:id/pod, exactly as the
  * live v1.4.2 fleet calls them. Guarded by golden-file contract tests; any
- * change to a byte of these responses fails CI.
+ * change to a byte of these responses fails the test suite.
  */
 @Roles('driver')
 @Controller({ path: 'stops', version: VERSION_NEUTRAL })
