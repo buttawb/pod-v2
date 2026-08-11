@@ -60,11 +60,19 @@ scripts/backfill-pods.ts    checkpointed, resumable, self-verifying
 ## Run it locally
 
 ```bash
-cd backend && cp .env.example .env      # set DATABASE_URL and JWT_SECRET
+# 1. A Postgres the API can reach (any 14+ will do):
+createdb -p 5433 -O pod pod   # after: CREATE ROLE pod LOGIN PASSWORD '...';
+
+# 2. The API
+cd backend && cp .env.example .env      # point DATABASE_URL at that database
 npm install
 npm run migration:run
 npm run seed                            # prints the demo logins
-npm run start:dev
+AWS_PROFILE=personal npm run start:dev  # profile is for S3 presign + Bedrock
+
+# 3. The dashboard (separate shell)
+cd dashboard && npm install
+VITE_API_BASE=http://localhost:3000 npm run dev
 ```
 
 Tests: `npm test` (unit) and `npm run test:e2e` (needs a seeded database).
