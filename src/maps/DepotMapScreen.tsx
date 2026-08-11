@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import {
   Camera,
   GeoJSONSource,
@@ -9,13 +9,17 @@ import {
   type CameraRef,
   type GeoJSONSourceRef,
 } from '@maplibre/maplibre-react-native';
+import { Feather } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { apiRequest } from '../api/client';
-import { BottomBar, Button, colors, spacing, type } from '../ui/components';
+import { BottomBar, Button, colors, radius, shadow, spacing, type } from '../ui/components';
 import {
   ATTRIBUTION,
   BASEMAP_STYLE_URL,
+  CLUSTER_COLOR,
   DEPOT_CENTER,
   DEPOT_ZOOM,
+  GLYPH_FONT,
   STATUS_COLOR_EXPRESSION,
   STATUS_COLORS,
   STATUS_LABELS,
@@ -57,6 +61,7 @@ const ALL_STATUSES: StatusCode[] = [
  * source is shown only while a filter is active.
  */
 export function DepotMapScreen({ onBack }: { onBack: () => void }) {
+  const insets = useSafeAreaInsets();
   const [data, setData] = useState<DepotFeatureCollection | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<StatusCode>>(new Set(ALL_STATUSES));
@@ -170,7 +175,7 @@ export function DepotMapScreen({ onBack }: { onBack: () => void }) {
                 filter={['has', 'point_count'] as never}
                 layout={{ visibility: filtering ? 'none' : 'visible' }}
                 paint={{
-                  'circle-color': '#0B5FD6',
+                  'circle-color': CLUSTER_COLOR,
                   'circle-opacity': 0.85,
                   'circle-stroke-width': 2,
                   'circle-stroke-color': '#FFFFFF',
@@ -192,6 +197,7 @@ export function DepotMapScreen({ onBack }: { onBack: () => void }) {
                 layout={{
                   visibility: filtering ? 'none' : 'visible',
                   'text-field': ['get', 'point_count_abbreviated'] as never,
+                  'text-font': GLYPH_FONT,
                   'text-size': 13,
                   'text-allow-overlap': true,
                 }}
@@ -233,38 +239,71 @@ export function DepotMapScreen({ onBack }: { onBack: () => void }) {
         )}
       </Map>
 
-      <View style={styles.overlay} pointerEvents="box-none">
-        <View style={styles.chips}>
+      <View style={[styles.overlay, { top: insets.top + spacing.sm }]} pointerEvents="box-none">
+        <View style={styles.topRow}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Back to maps"
+            onPress={onBack}
+            style={styles.floatingButton}
+          >
+            <Feather name="chevron-left" size={22} color={colors.text} />
+          </Pressable>
+          <View style={styles.countPill}>
+            <Text style={styles.countText}>{data.features.length.toLocaleString()} stops</Text>
+          </View>
+        </View>
+
+        {/* Scrolls rather than wraps: four chips do not fit on one line on a
+            360dp handset, and a second row pushed the map's top edge down. */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.chips}
+        >
           {ALL_STATUSES.map((status) => {
             const on = selected.has(status);
             return (
               <Pressable
                 key={status}
+                accessibilityRole="button"
+                accessibilityState={{ selected: on }}
                 onPress={() => toggle(status)}
                 style={[
                   styles.chip,
-                  on && { backgroundColor: STATUS_COLORS[status], borderColor: STATUS_COLORS[status] },
+                  on && {
+                    backgroundColor: STATUS_COLORS[status],
+                    borderColor: STATUS_COLORS[status],
+                  },
                 ]}
               >
+                <View
+                  style={[
+                    styles.chipDot,
+                    { backgroundColor: on ? '#FFFFFF' : STATUS_COLORS[status] },
+                  ]}
+                />
                 <Text style={[styles.chipText, on && styles.chipTextOn]}>
                   {STATUS_LABELS[status]}
                 </Text>
               </Pressable>
             );
           })}
-        </View>
-        <Text style={styles.meta}>
-          {data.features.length} stops · {RENDER_MODE} · {ATTRIBUTION}
-        </Text>
-        {tourStats ? (
+        </ScrollView>
+      </View>
+
+      <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
+        <Text style={styles.meta}>{ATTRIBUTION}</Text>
+        {__DEV__ ? (
           <Text style={styles.meta}>
-            tour {tourStats.durationMs}ms · {tourStats.steps} steps
+            {RENDER_MODE}
+            {tourStats ? ` · tour ${tourStats.durationMs}ms · ${tourStats.steps} steps` : ''}
           </Text>
         ) : null}
       </View>
 
-      <BottomBar>
-        {__DEV__ ? (
+      {__DEV__ ? (
+        <BottomBar>
           <Button
             label="Run camera tour (perf)"
             variant="secondary"
@@ -274,9 +313,8 @@ export function DepotMapScreen({ onBack }: { onBack: () => void }) {
               );
             }}
           />
-        ) : null}
-        <Button label="Back" variant="secondary" onPress={onBack} />
-      </BottomBar>
+        </BottomBar>
+      ) : null}
     </View>
   );
 }
@@ -285,29 +323,57 @@ export function DepotMapScreen({ onBack }: { onBack: () => void }) {
 const MARKER_BASELINE_LIMIT = 1500;
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background },
+  container: { flex: 1, backgroundColor: colors.page },
   map: { flex: 1 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md },
-  overlay: { position: 'absolute', top: spacing.sm, left: spacing.sm, right: spacing.sm, gap: 6 },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+
+  overlay: { position: 'absolute', left: spacing.md, right: spacing.md, gap: spacing.sm },
+  topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  floatingButton: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.background,
+    ...shadow.raised,
+  },
+  countPill: {
+    paddingHorizontal: spacing.sm + 2,
+    height: 32,
+    justifyContent: 'center',
+    borderRadius: radius.full,
+    backgroundColor: colors.background,
+    ...shadow.raised,
+  },
+  countText: { fontSize: 13, fontWeight: '600', color: colors.text },
+
+  chips: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingRight: spacing.md },
   chip: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 6,
-    borderRadius: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: spacing.sm + 2,
+    height: 34,
+    borderRadius: radius.full,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: 'rgba(255,255,255,0.92)',
+    backgroundColor: colors.background,
+    ...shadow.card,
   },
+  chipDot: { width: 7, height: 7, borderRadius: 4 },
   chipText: { fontSize: 13, fontWeight: '600', color: colors.text },
   chipTextOn: { color: '#FFFFFF' },
+
+  footer: { position: 'absolute', left: spacing.md, right: spacing.md, bottom: 0, gap: 2 },
   meta: {
     fontSize: 11,
-    color: colors.text,
+    color: colors.textMuted,
     backgroundColor: 'rgba(255,255,255,0.85)',
     alignSelf: 'flex-start',
     paddingHorizontal: 6,
     paddingVertical: 2,
-    borderRadius: 4,
+    borderRadius: radius.sm,
   },
   markerDot: {
     width: 12,

@@ -1,13 +1,29 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { BottomBar, Button, Screen, colors, spacing, type } from '../ui/components';
+import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Feather } from '@expo/vector-icons';
+import {
+  BottomBar,
+  Button,
+  Card,
+  Chip,
+  Field,
+  Input,
+  PageHeader,
+  Screen,
+  SectionLabel,
+  colors,
+  radius,
+  spacing,
+  type,
+} from '../ui/components';
 import {
   OUTCOME_ORDER,
   OUTCOME_SPECS,
   MAX_PHOTOS_PER_ATTEMPT,
   REASON_CODES,
   validateEvidence,
-  type Outcome,
+  Outcome,
+  type Outcome as OutcomeValue,
 } from '../domain/outcomes';
 import {
   addPhoto,
@@ -28,9 +44,19 @@ import { APP_VERSION } from '../config';
 const LOW_STORAGE_BYTES = 500 * 1024 * 1024;
 const SIGNATURE_INDEX = 100;
 
+/** One glyph per outcome so the tile is recognisable before it is read. */
+const OUTCOME_ICONS: Record<OutcomeValue, keyof typeof Feather.glyphMap> = {
+  [Outcome.DeliveredToPerson]: 'user-check',
+  [Outcome.LeftWithNeighbour]: 'home',
+  [Outcome.LeftSafePlace]: 'package',
+  [Outcome.NoAnswerCarded]: 'mail',
+  [Outcome.Refused]: 'x-circle',
+  [Outcome.AccessFailure]: 'lock',
+};
+
 export function CaptureScreen({ stopId, onDone }: { stopId: string; onDone: () => void }) {
   const [draftId, setDraftId] = useState<string | null>(null);
-  const [outcome, setOutcome] = useState<Outcome | null>(null);
+  const [outcome, setOutcome] = useState<OutcomeValue | null>(null);
   const [photos, setPhotos] = useState<PhotoRow[]>([]);
   const [signaturePath, setSignaturePath] = useState<string | null>(null);
   const [reasonCode, setReasonCode] = useState<string | null>(null);
@@ -181,26 +207,40 @@ export function CaptureScreen({ stopId, onDone }: { stopId: string; onDone: () =
 
   return (
     <Screen>
+      <PageHeader title="Record attempt" subtitle="Saved to this phone first" onBack={onDone} />
+
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <Text style={[type.heading, styles.section]}>What happened?</Text>
+        <SectionLabel>What happened?</SectionLabel>
         <View style={styles.outcomeGrid}>
           {OUTCOME_ORDER.map((value) => {
             const selected = outcome === value;
             return (
               <Pressable
                 key={value}
+                accessibilityRole="radio"
+                accessibilityState={{ selected }}
                 onPress={() => {
                   setOutcome(value);
                   setReasonCode(null);
                 }}
-                style={[styles.outcomeTile, selected && styles.outcomeTileSelected]}
+                style={({ pressed }) => [
+                  styles.outcomeTile,
+                  selected && styles.outcomeTileSelected,
+                  pressed && !selected && { backgroundColor: colors.secondary },
+                ]}
               >
-                <Text style={[styles.outcomeLabel, selected && styles.outcomeLabelSelected]}>
-                  {OUTCOME_SPECS[value].label}
-                </Text>
-                <Text style={[styles.outcomeHint, selected && styles.outcomeHintSelected]}>
-                  {OUTCOME_SPECS[value].evidenceHint}
-                </Text>
+                <View style={[styles.outcomeIcon, selected && styles.outcomeIconSelected]}>
+                  <Feather
+                    name={OUTCOME_ICONS[value]}
+                    size={18}
+                    color={selected ? colors.primaryText : colors.textMuted}
+                  />
+                </View>
+                <View style={styles.outcomeText}>
+                  <Text style={styles.outcomeLabel}>{OUTCOME_SPECS[value].label}</Text>
+                  <Text style={type.meta}>{OUTCOME_SPECS[value].evidenceHint}</Text>
+                </View>
+                {selected ? <Feather name="check-circle" size={20} color={colors.primary} /> : null}
               </Pressable>
             );
           })}
@@ -208,173 +248,211 @@ export function CaptureScreen({ stopId, onDone }: { stopId: string; onDone: () =
 
         {spec ? (
           <>
+            <SectionLabel>Evidence</SectionLabel>
+
             {spec.signature === 'required' ? (
-              <View style={styles.section}>
-                <Text style={type.heading}>Signature</Text>
+              <Card style={styles.section}>
+                <Text style={type.subheading}>Signature</Text>
                 {signaturePath ? (
                   <Image source={{ uri: signaturePath }} style={styles.signaturePreview} />
                 ) : null}
                 <Button
                   label={signaturePath ? 'Sign again' : 'Capture signature'}
+                  icon="edit-3"
                   variant="secondary"
                   onPress={() => setShowSignature(true)}
                 />
-              </View>
+              </Card>
             ) : null}
 
             {spec.neighbourHouseNumber === 'required' ? (
-              <View style={styles.section}>
-                <Text style={type.heading}>Neighbour&apos;s house number</Text>
-                <TextInput
-                  style={styles.input}
-                  value={houseNumber}
-                  onChangeText={setHouseNumber}
-                  placeholder="e.g. 42"
-                  placeholderTextColor={colors.textMuted}
-                  inputMode="text"
-                />
-              </View>
+              <Card style={styles.section}>
+                <Field label="Neighbour's house number">
+                  <Input
+                    value={houseNumber}
+                    onChangeText={setHouseNumber}
+                    placeholder="e.g. 42"
+                    inputMode="text"
+                  />
+                </Field>
+              </Card>
             ) : null}
 
             {spec.reason === 'required' ? (
-              <View style={styles.section}>
-                <Text style={type.heading}>Reason</Text>
+              <Card style={styles.section}>
+                <Text style={type.subheading}>Reason</Text>
                 <View style={styles.chips}>
                   {(REASON_CODES[outcome as string] ?? []).map((reason) => (
-                    <Pressable
+                    <Chip
                       key={reason}
+                      label={reason}
+                      selected={reasonCode === reason}
                       onPress={() => setReasonCode(reason)}
-                      style={[styles.chip, reasonCode === reason && styles.chipSelected]}
+                    />
+                  ))}
+                </View>
+              </Card>
+            ) : null}
+
+            <Card style={styles.section}>
+              <View style={styles.sectionHead}>
+                <Text style={type.subheading}>Photos</Text>
+                <Text style={type.meta}>
+                  {photoCount}/{MAX_PHOTOS_PER_ATTEMPT}
+                  {spec.photos.min > 0 ? '  ·  required' : '  ·  optional'}
+                </Text>
+              </View>
+
+              {photoCount > 0 ? (
+                <View style={styles.photoRow}>
+                  {photoRows.map((photo) => (
+                    <Pressable
+                      key={photo.photo_index}
+                      accessibilityLabel="Photo, long press to remove"
+                      onLongPress={() => {
+                        // Row and file go together: a row-only delete would
+                        // leave the JPEG orphaned on the device forever.
+                        void removePhoto(photo.client_attempt_id, photo.photo_index)
+                          .then(() => deleteFile(photo.local_path))
+                          .then(refreshPhotos);
+                      }}
                     >
-                      <Text
-                        style={[styles.chipText, reasonCode === reason && styles.chipTextSelected]}
-                      >
-                        {reason}
-                      </Text>
+                      <Image source={{ uri: photo.local_path }} style={styles.photo} />
+                      <View style={styles.photoRemove}>
+                        <Feather name="x" size={11} color={colors.primaryText} />
+                      </View>
                     </Pressable>
                   ))}
                 </View>
-              </View>
-            ) : null}
-
-            <View style={styles.section}>
-              <Text style={type.heading}>
-                Photos {photoCount}/{MAX_PHOTOS_PER_ATTEMPT}
-                {spec.photos.min > 0 ? ' (required)' : ' (optional)'}
-              </Text>
-              <View style={styles.photoRow}>
-                {photoRows.map((photo) => (
-                    <Pressable
-                      key={photo.photo_index}
-                    onLongPress={() => {
-                      // Row and file go together: a row-only delete would
-                      // leave the JPEG orphaned on the device forever.
-                      void removePhoto(photo.client_attempt_id, photo.photo_index)
-                        .then(() => deleteFile(photo.local_path))
-                        .then(refreshPhotos);
-                    }}
-                  >
-                    <Image source={{ uri: photo.local_path }} style={styles.photo} />
-                  </Pressable>
-                ))}
-              </View>
-              {photoCount < MAX_PHOTOS_PER_ATTEMPT ? (
-                <Button label="Take photo" variant="secondary" onPress={() => void onTakePhoto()} />
               ) : null}
-            </View>
 
-            <View style={styles.section}>
-              <Text style={type.heading}>Parcel barcode</Text>
-              <TextInput
-                style={styles.input}
-                value={barcode}
-                onChangeText={(value) => {
-                  setBarcode(value);
-                  setBarcodeSource('manual');
-                }}
-                placeholder="Scan or type"
-                placeholderTextColor={colors.textMuted}
-                autoCapitalize="characters"
-              />
-              <Button label="Scan barcode" variant="secondary" onPress={() => setShowScanner(true)} />
-            </View>
+              {photoCount < MAX_PHOTOS_PER_ATTEMPT ? (
+                <Button
+                  label="Take photo"
+                  icon="camera"
+                  variant="secondary"
+                  onPress={() => void onTakePhoto()}
+                />
+              ) : null}
+              {photoCount > 0 ? <Text style={type.meta}>Long press a photo to remove it.</Text> : null}
+            </Card>
 
-            <View style={styles.section}>
-              <Text style={type.heading}>Note (optional)</Text>
-              <TextInput
-                style={[styles.input, styles.noteInput]}
-                value={note}
-                onChangeText={setNote}
-                placeholder="e.g. left round back by the green bin"
-                placeholderTextColor={colors.textMuted}
-                multiline
+            <SectionLabel>Details</SectionLabel>
+
+            <Card style={styles.section}>
+              <Field label="Parcel barcode">
+                <Input
+                  value={barcode}
+                  onChangeText={(value) => {
+                    setBarcode(value);
+                    setBarcodeSource('manual');
+                  }}
+                  placeholder="Scan or type"
+                  autoCapitalize="characters"
+                />
+              </Field>
+              <Button
+                label="Scan barcode"
+                icon="maximize"
+                variant="secondary"
+                onPress={() => setShowScanner(true)}
               />
-            </View>
+            </Card>
+
+            <Card style={styles.section}>
+              <Field label="Note (optional)">
+                <Input
+                  value={note}
+                  onChangeText={setNote}
+                  placeholder="e.g. left round back by the green bin"
+                  multiline
+                />
+              </Field>
+            </Card>
           </>
         ) : null}
       </ScrollView>
 
       <BottomBar>
-        {violations.length > 0 ? <Text style={styles.violation}>{violations[0]}</Text> : null}
+        {violations.length > 0 ? (
+          <View style={styles.violation}>
+            <Feather name="info" size={15} color={colors.progress} />
+            <Text style={styles.violationText}>{violations[0]}</Text>
+          </View>
+        ) : null}
         <Button
           label="Complete attempt"
+          icon="check"
           onPress={() => void submit()}
           disabled={violations.length > 0}
           loading={busy}
         />
-        <Button label="Cancel" variant="secondary" onPress={onDone} />
       </BottomBar>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  content: { padding: spacing.md, paddingBottom: spacing.xl, gap: spacing.lg },
+  content: { padding: spacing.md, paddingBottom: spacing.xl, gap: spacing.sm },
   section: { gap: spacing.sm },
+  sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+
   outcomeGrid: { gap: spacing.sm },
   outcomeTile: {
-    borderWidth: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.card,
+    borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 12,
+    borderRadius: radius.xl,
     padding: spacing.md,
-    minHeight: 64,
+    minHeight: 68,
+  },
+  outcomeTileSelected: { borderColor: colors.primary, backgroundColor: colors.background },
+  outcomeIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.lg,
+    backgroundColor: colors.secondary,
+    alignItems: 'center',
     justifyContent: 'center',
   },
-  outcomeTileSelected: { borderColor: colors.primary, backgroundColor: '#EAF2FE' },
-  outcomeLabel: { fontSize: 18, fontWeight: '700', color: colors.text },
-  outcomeLabelSelected: { color: colors.primary },
-  outcomeHint: { fontSize: 14, color: colors.textMuted, marginTop: 2 },
-  outcomeHintSelected: { color: colors.primary },
-  input: {
-    minHeight: 52,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 10,
-    paddingHorizontal: spacing.md,
-    fontSize: 18,
-    color: colors.text,
-  },
-  noteInput: { minHeight: 88, paddingTop: spacing.sm, textAlignVertical: 'top' },
+  outcomeIconSelected: { backgroundColor: colors.primary },
+  outcomeText: { flex: 1, gap: 2 },
+  outcomeLabel: { fontSize: 16, fontWeight: '600', color: colors.text },
+
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-  chip: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 24,
-    paddingHorizontal: spacing.md,
-    minHeight: 44,
-    justifyContent: 'center',
-  },
-  chipSelected: { borderColor: colors.primary, backgroundColor: '#EAF2FE' },
-  chipText: { fontSize: 16, color: colors.text },
-  chipTextSelected: { color: colors.primary, fontWeight: '700' },
   photoRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-  photo: { width: 76, height: 76, borderRadius: 8, backgroundColor: colors.surface },
+  photo: {
+    width: 76,
+    height: 76,
+    borderRadius: radius.lg,
+    backgroundColor: colors.secondary,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+  },
+  photoRemove: {
+    position: 'absolute',
+    top: -5,
+    right: -5,
+    width: 20,
+    height: 20,
+    borderRadius: radius.full,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: colors.card,
+  },
   signaturePreview: {
     height: 120,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 8,
+    borderRadius: radius.lg,
     backgroundColor: colors.background,
   },
-  violation: { color: colors.progress, fontSize: 15, fontWeight: '600' },
+
+  violation: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  violationText: { flex: 1, color: colors.progress, fontSize: 14, fontWeight: '600' },
 });

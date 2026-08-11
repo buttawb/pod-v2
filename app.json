@@ -10,7 +10,7 @@
       "package": "com.podv2.driver",
       "versionCode": 200,
       "adaptiveIcon": {
-        "backgroundColor": "#0B5FD6",
+        "backgroundColor": "#FFFFFF",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"

@@ -1,6 +1,21 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { BottomBar, Button, Card, Screen, SyncBadge, colors, spacing, type } from '../ui/components';
+import { Feather } from '@expo/vector-icons';
+import {
+  Banner,
+  BottomBar,
+  Button,
+  Card,
+  EmptyState,
+  PageHeader,
+  Screen,
+  SectionLabel,
+  SyncBadge,
+  colors,
+  radius,
+  spacing,
+  type,
+} from '../ui/components';
 import { attemptBadge } from '../sync/badges';
 import { getStop, type StopRow } from '../db/stops-repo';
 import { getDatabase } from '../db/schema';
@@ -61,41 +76,54 @@ export function StopDetailScreen({
 
   return (
     <Screen>
-      <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.header}>
-          <Text style={type.title}>{stop?.address ?? 'Stop'}</Text>
-          <Text style={type.small}>{stop?.postcode}</Text>
-          {stop?.removed === 1 ? (
-            <Text style={styles.removed}>
-              Removed by dispatch. Evidence you already captured still uploads.
-            </Text>
-          ) : null}
-        </View>
+      <PageHeader title={stop?.address ?? 'Stop'} subtitle={stop?.postcode} onBack={onBack} />
 
-        <Text style={[type.heading, styles.sectionTitle]}>
-          Attempts {attempts.length > 0 ? `(${attempts.length})` : ''}
-        </Text>
+      {stop?.removed === 1 ? (
+        <Banner
+          label="Removed by dispatch. Evidence you already captured still uploads."
+          tone="progress"
+        />
+      ) : null}
+
+      <ScrollView contentContainerStyle={styles.content}>
+        <Card style={styles.locationCard}>
+          <View style={styles.locationRow}>
+            <View style={styles.pin}>
+              <Feather name="map-pin" size={18} color={colors.text} />
+            </View>
+            <View style={styles.locationText}>
+              <Text style={type.bodyStrong}>{stop?.address ?? '-'}</Text>
+              <Text style={type.meta}>
+                {stop?.postcode}
+                {stop ? `  ·  Stop ${stop.seq}` : ''}
+              </Text>
+            </View>
+          </View>
+        </Card>
+
+        <SectionLabel>
+          Attempts{attempts.length > 0 ? ` (${attempts.length})` : ''}
+        </SectionLabel>
 
         {attempts.length === 0 ? (
           <Card>
-            <Text style={type.body}>No attempts recorded yet.</Text>
+            <EmptyState
+              icon="clipboard"
+              title="No attempts yet"
+              body="Record what happened at this stop and it is saved to this phone straight away."
+            />
           </Card>
         ) : (
           attempts.map((attempt) => (
-            <Card key={attempt.client_attempt_id}>
+            <Card key={attempt.client_attempt_id} style={styles.attemptCard}>
               <View style={styles.attemptRow}>
                 <View style={styles.attemptDetails}>
                   <Text style={type.bodyStrong}>
-                    #{attempt.attempt_no}{' '}
                     {attempt.outcome ? OUTCOME_SPECS[attempt.outcome].label : 'Unknown'}
                   </Text>
-                  <Text style={type.small}>{formatTime(attempt.captured_at)}</Text>
-                  {attempt.sync_state === SyncState.NeedsAttention ? (
-                    <Text style={styles.error}>
-                      {attempt.last_error_message ?? 'Could not reach the server'}
-                      {'\n'}Everything is still saved on this phone.
-                    </Text>
-                  ) : null}
+                  <Text style={type.meta}>
+                    Attempt {attempt.attempt_no}  ·  {formatTime(attempt.captured_at)}
+                  </Text>
                 </View>
                 <SyncBadge
                   badge={attemptBadge(
@@ -105,15 +133,23 @@ export function StopDetailScreen({
                   )}
                 />
               </View>
+
               {attempt.sync_state === SyncState.NeedsAttention ? (
-                <View style={styles.retry}>
-                  <Button
-                    label="Retry now"
-                    variant="secondary"
-                    onPress={() => {
-                      void retryNow(attempt.client_attempt_id).then(() => syncEngine.kick());
-                    }}
-                  />
+                <View style={styles.errorBlock}>
+                  <Text style={styles.errorText}>
+                    {attempt.last_error_message ?? 'Could not reach the server'}
+                  </Text>
+                  <Text style={type.meta}>Everything is still saved on this phone.</Text>
+                  <View style={styles.retry}>
+                    <Button
+                      label="Retry now"
+                      icon="refresh-cw"
+                      variant="secondary"
+                      onPress={() => {
+                        void retryNow(attempt.client_attempt_id).then(() => syncEngine.kick());
+                      }}
+                    />
+                  </View>
                 </View>
               ) : null}
             </Card>
@@ -123,12 +159,14 @@ export function StopDetailScreen({
 
       <BottomBar>
         {captureBlocked ? (
-          <Text style={styles.blocked}>
-            Update required before recording new attempts. Uploads still work.
-          </Text>
+          <View style={styles.blocked}>
+            <Feather name="alert-circle" size={16} color={colors.alert} />
+            <Text style={styles.blockedText}>
+              Update required before recording new attempts. Uploads still work.
+            </Text>
+          </View>
         ) : null}
-        <Button label="Record attempt" onPress={onCapture} disabled={captureBlocked} />
-        <Button label="Back to today" variant="secondary" onPress={onBack} />
+        <Button label="Record attempt" icon="plus" onPress={onCapture} disabled={captureBlocked} />
       </BottomBar>
     </Screen>
   );
@@ -136,17 +174,36 @@ export function StopDetailScreen({
 
 function formatTime(iso: string): string {
   const date = new Date(iso);
-  return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  return `${date.toLocaleDateString([], { day: '2-digit', month: 'short' })} ${date.toLocaleTimeString(
+    [],
+    { hour: '2-digit', minute: '2-digit' },
+  )}`;
 }
 
 const styles = StyleSheet.create({
-  content: { paddingBottom: spacing.lg },
-  header: { padding: spacing.md, gap: 2 },
-  sectionTitle: { paddingHorizontal: spacing.md, paddingBottom: spacing.sm },
+  content: { padding: spacing.md, paddingBottom: spacing.lg, gap: spacing.sm },
+  locationCard: { marginBottom: spacing.sm },
+  locationRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  pin: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.lg,
+    backgroundColor: colors.secondary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  locationText: { flex: 1, gap: 2 },
+  attemptCard: { gap: spacing.sm },
   attemptRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
   attemptDetails: { flex: 1, gap: 2 },
-  error: { color: colors.alert, fontSize: 14, marginTop: 4 },
-  removed: { color: colors.progress, fontSize: 14, marginTop: 4 },
-  blocked: { color: colors.alert, fontSize: 14, fontWeight: '600' },
+  errorBlock: {
+    gap: 2,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+    paddingTop: spacing.sm,
+  },
+  errorText: { color: colors.alert, fontSize: 14, fontWeight: '600' },
   retry: { marginTop: spacing.sm },
+  blocked: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  blockedText: { flex: 1, color: colors.alert, fontSize: 13, fontWeight: '600' },
 });

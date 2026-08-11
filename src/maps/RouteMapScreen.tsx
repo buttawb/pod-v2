@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Feather } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Camera,
   GeoJSONSource,
@@ -10,11 +12,12 @@ import {
 import type { NativeSyntheticEvent } from 'react-native';
 import type { PressEventWithFeatures } from '@maplibre/maplibre-react-native';
 import { getTodayStops, type StopWithSync } from '../db/stops-repo';
-import { BottomBar, Button, colors, spacing, type } from '../ui/components';
+import { colors, radius, shadow, spacing } from '../ui/components';
 import {
   ATTRIBUTION,
   BASEMAP_STYLE_URL,
   DEPOT_CENTER,
+  GLYPH_FONT,
   STATUS_COLOR_EXPRESSION,
   STATUS_COLORS,
   STATUS_LABELS,
@@ -37,6 +40,7 @@ export function RouteMapScreen({
   onOpenStop: (stopId: string) => void;
   onBack: () => void;
 }) {
+  const insets = useSafeAreaInsets();
   const [stops, setStops] = useState<StopWithSync[] | null>(null);
   const [following, setFollowing] = useState(true);
 
@@ -115,6 +119,7 @@ export function RouteMapScreen({
             minzoom={14}
             layout={{
               'text-field': ['to-string', ['get', 'q']] as never,
+              'text-font': GLYPH_FONT,
               'text-size': 11,
               'text-allow-overlap': false,
             }}
@@ -123,42 +128,107 @@ export function RouteMapScreen({
         </GeoJSONSource>
       </Map>
 
-      <View style={styles.legend} pointerEvents="none">
-        {([StatusCode.Pending, StatusCode.Delivered, StatusCode.Attempted, StatusCode.Failed] as StatusCode[]).map(
-          (status) => (
+      <View style={[styles.overlay, { top: insets.top + spacing.sm }]} pointerEvents="box-none">
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Back to maps"
+          onPress={onBack}
+          style={styles.floatingButton}
+        >
+          <Feather name="chevron-left" size={22} color={colors.text} />
+        </Pressable>
+
+        <View style={styles.legend}>
+          {(
+            [
+              StatusCode.Pending,
+              StatusCode.Delivered,
+              StatusCode.Attempted,
+              StatusCode.Failed,
+            ] as StatusCode[]
+          ).map((status) => (
             <View key={status} style={styles.legendRow}>
               <View style={[styles.dot, { backgroundColor: STATUS_COLORS[status] }]} />
               <Text style={styles.legendText}>{STATUS_LABELS[status]}</Text>
             </View>
-          ),
-        )}
-        <Text style={styles.legendText}>{ATTRIBUTION}</Text>
+          ))}
+        </View>
       </View>
 
-      <BottomBar>
-        {!following ? (
-          <Button label="Follow my position" variant="secondary" onPress={() => setFollowing(true)} />
-        ) : null}
-        <Button label="Back" variant="secondary" onPress={onBack} />
-      </BottomBar>
+      {!following ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => setFollowing(true)}
+          style={[styles.recentre, { bottom: Math.max(insets.bottom, spacing.md) + spacing.lg }]}
+        >
+          <Feather name="navigation" size={18} color={colors.primaryText} />
+          <Text style={styles.recentreText}>Follow my position</Text>
+        </Pressable>
+      ) : null}
+
+      <Text style={[styles.attribution, { bottom: Math.max(insets.bottom, spacing.sm) }]}>
+        {ATTRIBUTION}
+      </Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background },
+  container: { flex: 1, backgroundColor: colors.page },
   map: { flex: 1 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  legend: {
+
+  overlay: {
     position: 'absolute',
-    top: spacing.sm,
-    left: spacing.sm,
-    backgroundColor: 'rgba(255,255,255,0.9)',
-    borderRadius: 8,
-    padding: spacing.sm,
-    gap: 4,
+    left: spacing.md,
+    right: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+  },
+  floatingButton: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.background,
+    ...shadow.raised,
+  },
+  legend: {
+    backgroundColor: colors.background,
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: spacing.sm,
+    gap: 5,
+    ...shadow.raised,
   },
   legendRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  dot: { width: 10, height: 10, borderRadius: 5 },
-  legendText: { fontSize: 12, color: colors.text },
+  dot: { width: 9, height: 9, borderRadius: 5 },
+  legendText: { fontSize: 12, fontWeight: '500', color: colors.text },
+
+  recentre: {
+    position: 'absolute',
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    height: 48,
+    paddingHorizontal: spacing.md + 2,
+    borderRadius: radius.full,
+    backgroundColor: colors.primary,
+    ...shadow.raised,
+  },
+  recentreText: { fontSize: 15, fontWeight: '600', color: colors.primaryText },
+
+  attribution: {
+    position: 'absolute',
+    left: spacing.md,
+    fontSize: 11,
+    color: colors.textMuted,
+    backgroundColor: 'rgba(255,255,255,0.85)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: radius.sm,
+  },
 });

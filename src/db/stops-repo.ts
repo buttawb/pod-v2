@@ -38,17 +38,20 @@ interface ServerStop {
  */
 export async function getTodayStops(): Promise<StopWithSync[]> {
   return getDatabase().getAllAsync<StopWithSync>(
+    // Drafts are abandoned or in-flight capture sessions, not recorded work:
+    // the stop detail already hides them, and surfacing one here as a stop
+    // badge would tell the driver a stop had been attempted when it had not.
     `SELECT s.*,
-            (SELECT count(*) FROM attempts a WHERE a.stop_id = s.stop_id) AS attempt_count,
+            (SELECT count(*) FROM attempts a
+              WHERE a.stop_id = s.stop_id AND a.sync_state <> 'draft') AS attempt_count,
             (SELECT a.sync_state FROM attempts a
-              WHERE a.stop_id = s.stop_id
+              WHERE a.stop_id = s.stop_id AND a.sync_state <> 'draft'
               ORDER BY CASE a.sync_state
                 WHEN 'needs_attention' THEN 5
                 WHEN 'submitting' THEN 4
                 WHEN 'uploading_media' THEN 4
                 WHEN 'attempt_acked' THEN 4
                 WHEN 'queued' THEN 3
-                WHEN 'draft' THEN 2
                 ELSE 1 END DESC
               LIMIT 1) AS worst_sync_state
      FROM stops s

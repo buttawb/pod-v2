@@ -15,6 +15,14 @@ export const BASEMAP_FALLBACK_STYLE_URL =
 
 export const ATTRIBUTION = '(c) OpenStreetMap contributors';
 
+/**
+ * Every symbol layer must name this explicitly. Without `text-font` MapLibre
+ * asks for its built-in default stack ("Open Sans Regular, Arial Unicode MS
+ * Regular"), which OpenFreeMap does not host: the glyph request 404s and the
+ * labels render as nothing at all, silently.
+ */
+export const GLYPH_FONT = ['Noto Sans Regular'];
+
 /** Greater London, the seeded depot's coverage area. */
 export const DEPOT_CENTER: [number, number] = [-0.1278, 51.5074];
 export const DEPOT_ZOOM = 9.5;
@@ -40,12 +48,16 @@ export const STATUS_LABELS: Record<StatusCode, string> = {
   [StatusCode.Failed]: 'Failed',
 };
 
+/** The same four tones the list badges use, so map and list never disagree. */
 export const STATUS_COLORS: Record<StatusCode, string> = {
-  [StatusCode.Pending]: '#64748B',
-  [StatusCode.Attempted]: '#B45309',
-  [StatusCode.Delivered]: '#0E7C3F',
-  [StatusCode.Failed]: '#B3231C',
+  [StatusCode.Pending]: '#71717A',
+  [StatusCode.Attempted]: '#CA8A04',
+  [StatusCode.Delivered]: '#16A34A',
+  [StatusCode.Failed]: '#DC2626',
 };
+
+/** Cluster bubbles carry the brand blue; individual stops carry status. */
+export const CLUSTER_COLOR = '#1C56A8';
 
 /**
  * One data-driven expression colours every point on the GPU. Without this
@@ -63,7 +75,7 @@ export const STATUS_COLOR_EXPRESSION = [
   STATUS_COLORS[StatusCode.Delivered],
   StatusCode.Failed,
   STATUS_COLORS[StatusCode.Failed],
-  '#64748B',
+  '#71717A',
 ];
 
 export function statusCodeFor(status: string): StatusCode {

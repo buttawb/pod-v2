@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import { BottomBar, Button, Card, Screen, spacing, type } from '../ui/components';
+import { StyleSheet, View } from 'react-native';
+import { ListCard, PageHeader, Screen, SectionLabel, spacing } from '../ui/components';
 import { RouteMapScreen } from '../maps/RouteMapScreen';
 import { DepotMapScreen } from '../maps/DepotMapScreen';
 
@@ -24,27 +24,29 @@ export function MapsScreen({
 
   return (
     <Screen>
-      <View style={styles.header}>
-        <Text style={type.title}>Maps</Text>
+      <PageHeader title="Maps" subtitle="Two views of the same day" onBack={onBack} />
+
+      <View style={styles.content}>
+        <SectionLabel>Choose a view</SectionLabel>
+
+        <ListCard
+          icon="navigation"
+          title="My route"
+          subtitle="Your stops and live position. Tap a pin to open the stop."
+          onPress={() => setSurface('route')}
+        />
+
+        <ListCard
+          icon="grid"
+          title="Depot overview"
+          subtitle="Every stop in the coverage area, filterable by status."
+          onPress={() => setSurface('depot')}
+        />
       </View>
-
-      <Card onPress={() => setSurface('route')}>
-        <Text style={type.bodyStrong}>My route</Text>
-        <Text style={type.small}>Your stops and live position. Tap a pin to open the stop.</Text>
-      </Card>
-
-      <Card onPress={() => setSurface('depot')}>
-        <Text style={type.bodyStrong}>Depot overview</Text>
-        <Text style={type.small}>Every stop in the coverage area, filterable by status.</Text>
-      </Card>
-
-      <BottomBar>
-        <Button label="Back to today" variant="secondary" onPress={onBack} />
-      </BottomBar>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  header: { padding: spacing.md },
+  content: { padding: spacing.md, gap: spacing.sm },
 });

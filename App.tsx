@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { getMeta, openDatabase, setMeta } from './src/db/schema';
 import { runRecoverySweep } from './src/sync/recovery';
 import { syncEngine } from './src/sync/sync-engine';
@@ -66,7 +66,12 @@ export default function App() {
     return (
       <SafeAreaProvider>
         <View style={styles.center}>
-          <ActivityIndicator size="large" color={colors.primary} />
+          <Image
+            source={require('./assets/logo-mark.png')}
+            style={styles.bootMark}
+            resizeMode="contain"
+          />
+          <ActivityIndicator color={colors.primary} />
           <Text style={type.small}>Loading today&apos;s route</Text>
         </View>
       </SafeAreaProvider>
@@ -79,17 +84,17 @@ export default function App() {
   if (signedIn && gateLevel(gate) === GateLevel.Blocked) {
     return (
       <SafeAreaProvider>
-        <SafeAreaView style={styles.safe}>
+        <View style={styles.root}>
           <StatusBar style="dark" />
           <UpdateRequiredScreen />
-        </SafeAreaView>
+        </View>
       </SafeAreaProvider>
     );
   }
 
   return (
     <SafeAreaProvider>
-      <SafeAreaView style={styles.safe}>
+      <View style={styles.root}>
         <StatusBar style="dark" />
         {!signedIn ? (
           <LoginScreen
@@ -120,18 +125,19 @@ export default function App() {
             onBack={() => setRoute({ name: 'stops' })}
           />
         )}
-      </SafeAreaView>
+      </View>
     </SafeAreaProvider>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.background },
+  root: { flex: 1, backgroundColor: colors.page },
   center: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: spacing.sm,
+    gap: spacing.md,
     backgroundColor: colors.background,
   },
+  bootMark: { width: 96, height: 68, marginBottom: spacing.sm },
 });
