@@ -1,4 +1,5 @@
 import { apiRequest } from '../api/client';
+import { syncEngine } from '../sync/sync-engine';
 import { getDatabase, setMeta } from './schema';
 import { SyncState } from '../sync/state-machine';
 
@@ -108,6 +109,8 @@ export async function refreshTodayStops(): Promise<number> {
   });
 
   await setMeta('last_stops_sync_at', new Date().toISOString());
+  // Screens read from SQLite, so they have to be told the cache moved.
+  syncEngine.announce();
   return response.stops.length;
 }
 

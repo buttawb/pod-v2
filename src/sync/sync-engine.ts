@@ -68,6 +68,16 @@ class SyncEngine {
     for (const listener of this.listeners) listener();
   }
 
+  /**
+   * Announce that locally cached data changed for a reason other than the
+   * worker: a route pull, say. Screens render from SQLite, so without this
+   * a freshly fetched route sits in the database while the list still shows
+   * what it read on mount.
+   */
+  announce(): void {
+    this.notify();
+  }
+
   start(): () => void {
     const netSub = NetInfo.addEventListener((state) => {
       const nowOnline = Boolean(state.isConnected);
