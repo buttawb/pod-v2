@@ -12,6 +12,7 @@ import { StopListScreen } from './src/screens/StopListScreen';
 import { StopDetailScreen } from './src/screens/StopDetailScreen';
 import { CaptureScreen } from './src/screens/CaptureScreen';
 import { UpdateRequiredScreen } from './src/screens/UpdateRequiredScreen';
+import { MapsScreen } from './src/screens/MapsScreen';
 import { gateLevel, GateLevel, useVersionGate } from './src/version/version-gate';
 import { colors, spacing, type } from './src/ui/theme';
 
@@ -104,9 +105,10 @@ export default function App() {
             onDone={() => setRoute({ name: 'stop', stopId: route.stopId })}
           />
         ) : (
-          <View style={styles.center}>
-            <Text style={type.body}>Maps land in the next slice.</Text>
-          </View>
+          <MapsScreen
+            onOpenStop={(stopId) => setRoute({ name: 'stop', stopId })}
+            onBack={() => setRoute({ name: 'stops' })}
+          />
         )}
       </SafeAreaView>
     </SafeAreaProvider>
