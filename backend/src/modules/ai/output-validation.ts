@@ -4,6 +4,19 @@ const PHONE = /(\+?\d[\d\s().-]{8,}\d)/;
 const EMAIL = /[\w.+-]+@[\w-]+\.[\w.]+/;
 const BANNED_WORDS = /\b(guarantee|guaranteed|refund|compensation|lawsuit|liable)\b/i;
 
+/**
+ * Scrubbing needs every match; validation needs only to know whether one
+ * exists. Kept as separate literals rather than adding /g above, because
+ * `RegExp.test` with a global pattern advances lastIndex between calls and
+ * would make validateSummaryOutput flap on alternate invocations.
+ */
+const SCRUB_PATTERNS: Array<[RegExp, string]> = [
+  [new RegExp(EMAIL.source, 'gi'), '[email removed]'],
+  [new RegExp(PHONE.source, 'gi'), '[number removed]'],
+  [new RegExp(UK_POSTCODE.source, 'gi'), '[postcode removed]'],
+  [new RegExp(STREET_ADDRESS.source, 'gi'), '[address removed]'],
+];
+
 export const MAX_SUMMARY_CHARS = 140;
 export const INSUFFICIENT_SENTINEL = 'INSUFFICIENT';
 
@@ -26,7 +39,21 @@ export function validateSummaryOutput(text: string): string | null {
   return null;
 }
 
-/** Strip obvious PII from the note before it ever leaves our system. */
+/**
+ * Strip personal data from the note before it ever leaves our system.
+ *
+ * The note is the one free-text field the model sees, so it is the only way
+ * an address, a postcode or a contact detail could reach the provider at all:
+ * every other field we send is a closed outcome code. The published privacy
+ * policy states plainly that none of those reach it, so this function is what
+ * makes that sentence true, and every occurrence has to go, not just the
+ * first. Email is matched before phone, since an address like
+ * "sam@0800-123-4567.example" would otherwise be half-eaten by the phone
+ * pattern and left recognisable.
+ */
 export function scrubNote(note: string): string {
-  return note.replace(PHONE, '[number removed]').replace(EMAIL, '[email removed]').slice(0, 500);
+  return SCRUB_PATTERNS.reduce(
+    (text, [pattern, replacement]) => text.replace(pattern, replacement),
+    note,
+  ).slice(0, 500);
 }
