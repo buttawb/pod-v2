@@ -52,7 +52,13 @@ export class PodsProjectionService {
               source, raw_payload, captured_at
        FROM delivery_attempts
        WHERE stop_id = $1
-       ORDER BY captured_at DESC, received_at DESC
+       -- Order by captured_at, but never let it run ahead of the server
+       -- clock. A handset with a badly wrong future date would otherwise
+       -- pin itself as "latest" forever and freeze the projection, so every
+       -- genuine later attempt would stop updating what v1 clients see.
+       -- LEAST keeps the offline case intact: a genuinely old capture
+       -- submitted days late still sorts by when it was captured.
+       ORDER BY LEAST(captured_at, received_at) DESC, received_at DESC
        LIMIT 1`,
       [stopId],
     )) as LatestAttemptRow[];

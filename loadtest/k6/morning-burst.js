@@ -1,7 +1,7 @@
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Counter } from 'k6/metrics';
-import { attemptBody, authHeaders, BASE_URL, login, uuid } from './lib.js';
+import { attemptBody, authHeaders, BASE_URL, driverFor, login, uuid } from './lib.js';
 
 /**
  * Morning burst: 06:30-08:00 every driver signs in, pulls their route, and
@@ -41,7 +41,7 @@ export const options = {
 };
 
 export default function morningBurst() {
-  const token = login(`${__VU}-${__ITER}`);
+  const token = login(`${__VU}-${__ITER}`, driverFor(__VU));
   if (!token) return;
 
   const stopsResponse = http.get(

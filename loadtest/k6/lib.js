@@ -3,14 +3,25 @@ import { check } from 'k6';
 
 export const BASE_URL = __ENV.BASE_URL ?? 'https://18.139.240.68.sslip.io';
 
-const DRIVER_REF = __ENV.DRIVER_REF ?? 'EMP-TEST-001';
 const DRIVER_PASSWORD = __ENV.DRIVER_PASSWORD ?? 'TestDriver#2026';
 
-export function login(deviceSuffix) {
+/**
+ * The seeded fleet: one well-known test driver plus 32 others. Load is
+ * spread across them because rate limiting is tracked per identity, and a
+ * single driver hammering the API is a rate-limit test, not a capacity
+ * test. Real traffic is many drivers doing a little each.
+ */
+export const FLEET = ['EMP-TEST-001', ...Array.from({ length: 32 }, (_, i) => `EMP-${1001 + i}`)];
+
+export function driverFor(vu) {
+  return FLEET[vu % FLEET.length];
+}
+
+export function login(deviceSuffix, employeeRef) {
   const response = http.post(
     `${BASE_URL}/api/v2/auth/driver/login`,
     JSON.stringify({
-      employeeRef: DRIVER_REF,
+      employeeRef: employeeRef ?? FLEET[0],
       password: DRIVER_PASSWORD,
       deviceFingerprint: `k6-${deviceSuffix}`,
       appVersion: '2.0.0',

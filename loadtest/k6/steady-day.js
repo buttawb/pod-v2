@@ -1,6 +1,6 @@
 import http from 'k6/http';
 import { check } from 'k6';
-import { attemptBody, authHeaders, BASE_URL, login, uuid } from './lib.js';
+import { attemptBody, authHeaders, BASE_URL, FLEET, login, uuid } from './lib.js';
 
 /**
  * Steady state, modelled from the brief's own numbers:
@@ -35,19 +35,26 @@ export const options = {
 };
 
 export function setup() {
-  const token = login('steady-setup');
-  const stops = http.get(`${BASE_URL}/api/v2/stops`, authHeaders(token, 'today-list')).json('stops');
-  return { token, stopIds: stops.map((s) => s.id) };
+  // One session per seeded driver, so throughput is spread across the fleet
+  // exactly as it is in production rather than concentrated on one identity.
+  return FLEET.map((employeeRef, index) => {
+    const token = login(`steady-${index}`, employeeRef);
+    const stops = http
+      .get(`${BASE_URL}/api/v2/stops`, authHeaders(token, 'today-list'))
+      .json('stops');
+    return { token, stopIds: (stops ?? []).map((s) => s.id) };
+  }).filter((session) => session.stopIds.length > 0);
 }
 
-export default function steadyDay(data) {
-  const stopId = data.stopIds[Math.floor(Math.random() * data.stopIds.length)];
+export default function steadyDay(sessions) {
+  const session = sessions[__VU % sessions.length];
+  const stopId = session.stopIds[Math.floor(Math.random() * session.stopIds.length)];
   const clientAttemptId = uuid();
 
   const submit = http.post(
     `${BASE_URL}/api/v2/attempts`,
     attemptBody(clientAttemptId, stopId),
-    authHeaders(data.token, 'attempt-submit'),
+    authHeaders(session.token, 'attempt-submit'),
   );
   check(submit, { 'attempt accepted': (r) => r.status === 200 });
 
@@ -56,7 +63,7 @@ export default function steadyDay(data) {
   const presign = http.post(
     `${BASE_URL}/api/v2/attempts/${clientAttemptId}/upload-urls`,
     null,
-    authHeaders(data.token, 'presign'),
+    authHeaders(session.token, 'presign'),
   );
   check(presign, { 'presign 200/201': (r) => r.status === 200 || r.status === 201 });
 }

@@ -97,7 +97,13 @@ export class LegacyService {
     const payloadHash = createHash('sha256')
       .update(JSON.stringify({ stopId, ...rawPayload }))
       .digest('hex');
-    const clientAttemptId = uuidv5(`${stopId}:${payloadHash}`, LEGACY_IDEMPOTENCY_NS);
+    // v1 carries no idempotency key, so one is derived. The time bucket is
+    // what makes it safe: a network retry arrives within seconds and dedupes,
+    // while a genuine second attempt at the same stop hours later (identical
+    // note, identical outcome) is correctly recorded as a new event rather
+    // than silently discarded.
+    const bucket = Math.floor(Date.now() / (5 * 60_000));
+    const clientAttemptId = uuidv5(`${stopId}:${payloadHash}:${bucket}`, LEGACY_IDEMPOTENCY_NS);
 
     const coords =
       this.parseLatLng(body.location) ?? this.parseLatLng(stop.location) ?? { lat: stop.lat, lng: stop.lng };
@@ -147,17 +153,38 @@ export class LegacyService {
       });
     });
 
-    // v1 clients expect the pod row back (assumption documented in DECISIONS.md).
-    const pod = await this.pods.findOneOrFail({ where: { stopId } });
+    // v1 clients expect the pod row back (assumption documented in
+    // DECISIONS.md). The response is never allowed to depend on the
+    // dual-write flag: turning that off during the contract phase must not
+    // start returning 500 to a fleet we promised not to break, so the v1
+    // shape is synthesised from the attempt when no projection row exists.
+    const pod = await this.pods.findOne({ where: { stopId } });
+    if (pod) {
+      return {
+        id: pod.id,
+        stop_id: pod.stopId,
+        delivered: pod.delivered,
+        photo_url: pod.photoUrl,
+        signature_url: pod.signatureUrl,
+        location: pod.location,
+        note: pod.note,
+        created_at: pod.createdAt,
+      };
+    }
+
+    const [attempt] = (await this.dataSource.query(
+      `SELECT id, received_at FROM delivery_attempts WHERE client_attempt_id = $1`,
+      [clientAttemptId],
+    )) as Array<{ id: string; received_at: Date }>;
     return {
-      id: pod.id,
-      stop_id: pod.stopId,
-      delivered: pod.delivered,
-      photo_url: pod.photoUrl,
-      signature_url: pod.signatureUrl,
-      location: pod.location,
-      note: pod.note,
-      created_at: pod.createdAt,
+      id: attempt?.id ?? stopId,
+      stop_id: stopId,
+      delivered: body.delivered,
+      photo_url: body.photo_url ?? null,
+      signature_url: body.signature_url ?? null,
+      location: body.location ?? `${coords.lat},${coords.lng}`,
+      note: body.note ?? null,
+      created_at: attempt?.received_at ?? new Date(),
     };
   }
 

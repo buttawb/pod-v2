@@ -2,9 +2,10 @@ import { Module } from '@nestjs/common';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { EventEmitterModule } from '@nestjs/event-emitter';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtAuthGuard } from './common/auth/jwt-auth.guard';
+import { IdentityThrottlerGuard } from './common/throttle/identity-throttler.guard';
 import { ALL_ENTITIES } from './database/entities';
 import { envValidationSchema } from './config/env.validation';
 import { AiModule } from './modules/ai/ai.module';
@@ -49,7 +50,7 @@ import { SyncModule } from './modules/sync/sync.module';
   controllers: [AppConfigController, HealthController],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    { provide: APP_GUARD, useClass: IdentityThrottlerGuard },
     { provide: APP_INTERCEPTOR, useClass: VersionHeadersInterceptor },
   ],
 })

@@ -84,6 +84,9 @@ describe('v1 legacy contract (e2e)', () => {
       .expect(200);
     const stopId = stops.body.stops[10].id as string;
 
+    // A run-unique marker keeps the assertion independent of rows left by
+    // earlier runs against the same seeded database.
+    const note = `handed to resident ${randomUUID()}`;
     const res = await request(app.getHttpServer())
       .post(`/api/stops/${stopId}/pod`)
       .set('Authorization', `Bearer ${token}`)
@@ -91,7 +94,7 @@ describe('v1 legacy contract (e2e)', () => {
         delivered: true,
         photo_url: 'https://legacy-cdn.example.com/p.jpg',
         location: '51.5074,-0.1278',
-        note: 'handed to resident',
+        note,
       })
       .expect(201);
 
@@ -103,12 +106,12 @@ describe('v1 legacy contract (e2e)', () => {
     // Under the hood it became a v2 attempt with the raw body preserved.
     const attempts = (await dataSource.query(
       `SELECT source, outcome, raw_payload FROM delivery_attempts
-       WHERE stop_id = $1 AND source = 'v1_compat'`,
-      [stopId],
+       WHERE stop_id = $1 AND source = 'v1_compat' AND note = $2`,
+      [stopId, note],
     )) as Array<{ source: string; outcome: string; raw_payload: Record<string, unknown> }>;
     expect(attempts).toHaveLength(1);
     expect(attempts[0].outcome).toBe('delivered_to_person');
-    expect(attempts[0].raw_payload.note).toBe('handed to resident');
+    expect(attempts[0].raw_payload.note).toBe(note);
   });
 
   it('an identical v1 retry does not create a second attempt (derived idempotency)', async () => {
@@ -117,7 +120,8 @@ describe('v1 legacy contract (e2e)', () => {
       .set('Authorization', `Bearer ${token}`)
       .expect(200);
     const stopId = stops.body.stops[11].id as string;
-    const body = { delivered: false, location: '51.5,-0.1', note: 'no answer' };
+    const note = `no answer ${randomUUID()}`;
+    const body = { delivered: false, location: '51.5,-0.1', note };
 
     await request(app.getHttpServer())
       .post(`/api/stops/${stopId}/pod`)
@@ -130,9 +134,12 @@ describe('v1 legacy contract (e2e)', () => {
       .send(body)
       .expect(201);
 
+    // Two identical requests seconds apart are one event, not two: the
+    // derived key's time bucket dedupes the retry.
     const rows = (await dataSource.query(
-      `SELECT count(*)::int AS n FROM delivery_attempts WHERE stop_id = $1 AND source = 'v1_compat'`,
-      [stopId],
+      `SELECT count(*)::int AS n FROM delivery_attempts
+       WHERE stop_id = $1 AND source = 'v1_compat' AND note = $2`,
+      [stopId, note],
     )) as Array<{ n: number }>;
     expect(rows[0].n).toBe(1);
   });
