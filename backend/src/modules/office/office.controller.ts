@@ -15,7 +15,7 @@ import {
 import type { Request } from 'express';
 import { Observable } from 'rxjs';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
-import { Roles } from '../../common/auth/jwt-auth.guard';
+import { AllowQueryToken, Roles } from '../../common/auth/jwt-auth.guard';
 import type { JwtPayload } from '../../common/auth/jwt-payload';
 import { decodeCursor } from '../../common/pagination/cursor';
 import { AiSummaryService } from '../ai/ai-summary.service';
@@ -35,6 +35,7 @@ export class OfficeController {
    * the table (the source of truth), then switch to live doorbell events -
    * LISTEN/NOTIFY's at-most-once delivery costs nothing.
    */
+  @AllowQueryToken()
   @Sse('feed')
   feed(@Req() req: Request): Observable<MessageEvent> {
     const lastEventId = req.headers['last-event-id'];

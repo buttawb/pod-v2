@@ -16,6 +16,16 @@ export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
 export const ROLES_KEY = 'roles';
 export const Roles = (...roles: Role[]) => SetMetadata(ROLES_KEY, roles);
 
+/**
+ * Opt-in for SSE endpoints only. EventSource cannot send an Authorization
+ * header, so those routes also accept the short-lived access token as a
+ * query parameter. Restricted to read-only feeds and never applied to a
+ * route that writes, so a token leaking via a proxy log cannot mutate
+ * anything before it expires.
+ */
+export const ALLOW_QUERY_TOKEN_KEY = 'allowQueryToken';
+export const AllowQueryToken = () => SetMetadata(ALLOW_QUERY_TOKEN_KEY, true);
+
 /** Global guard: everything requires a valid access token unless @Public(). */
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
@@ -33,7 +43,16 @@ export class JwtAuthGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest<Request & { user?: JwtPayload }>();
     const header = request.headers.authorization;
-    const token = header?.startsWith('Bearer ') ? header.slice(7) : undefined;
+    let token = header?.startsWith('Bearer ') ? header.slice(7) : undefined;
+
+    if (!token) {
+      const allowQueryToken = this.reflector.getAllAndOverride<boolean>(ALLOW_QUERY_TOKEN_KEY, [
+        context.getHandler(),
+        context.getClass(),
+      ]);
+      const queryToken = request.query?.access_token;
+      if (allowQueryToken && typeof queryToken === 'string') token = queryToken;
+    }
     if (!token) throw new UnauthorizedException('Missing access token');
 
     try {

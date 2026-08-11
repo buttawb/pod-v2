@@ -89,7 +89,9 @@ export class OfficeService {
   }
 
   async listAttempts(cursor: Keyset | null, status?: string) {
-    const since = cursor ?? { ts: new Date(8640000000000000).toISOString(), id: 'ffffffff-ffff-ffff-ffff-ffffffffffff' };
+    // The first page has no upper bound. A sentinel "maximum date" would sit
+    // outside Postgres's timestamptz range, so the keyset predicate is
+    // omitted entirely rather than faked.
     const rows = (await this.dataSource.query(
       `SELECT a.id, a.stop_id, a.outcome, a.evidence_status, a.note, a.captured_at,
               a.received_at, a.source, a.app_version,
@@ -101,11 +103,11 @@ export class OfficeService {
        JOIN stops s ON s.id = a.stop_id
        JOIN drivers d ON d.id = a.driver_id
        LEFT JOIN ai_summaries ai ON ai.attempt_id = a.id
-       WHERE (a.received_at, a.id) < ($1::timestamptz, $2::uuid)
+       WHERE ($1::timestamptz IS NULL OR (a.received_at, a.id) < ($1::timestamptz, $2::uuid))
          AND ($3::text IS NULL OR a.outcome = $3)
        ORDER BY a.received_at DESC, a.id DESC
        LIMIT ${LIST_PAGE_SIZE}`,
-      [since.ts, since.id, status ?? null],
+      [cursor?.ts ?? null, cursor?.id ?? null, status ?? null],
     )) as Array<{ id: string; received_at: Date }>;
 
     const last = rows[rows.length - 1];

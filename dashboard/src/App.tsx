@@ -1,30 +1,34 @@
-import { AppRouting } from '@/routing/app-routing';
+import { useEffect, useState } from 'react';
 import { ThemeProvider } from 'next-themes';
-import { HelmetProvider } from 'react-helmet-async';
-import { BrowserRouter } from 'react-router-dom';
-import { LoadingBarContainer } from 'react-top-loading-bar';
 import { Toaster } from '@/components/ui/sonner';
-
-const { BASE_URL } = import.meta.env;
+import { LoginPage } from '@/pod/LoginPage';
+import { LiveStatusPage } from '@/pod/LiveStatusPage';
+import { getStoredSession, type OfficeSession } from '@/pod/api';
 
 export function App() {
+  const [session, setSession] = useState<OfficeSession | null>(null);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    setSession(getStoredSession());
+    setReady(true);
+  }, []);
+
   return (
     <ThemeProvider
       attribute="class"
       defaultTheme="light"
-      storageKey="vite-theme"
+      storageKey="pod-theme"
       enableSystem
       disableTransitionOnChange
       enableColorScheme
     >
-      <HelmetProvider>
-        <LoadingBarContainer>
-          <BrowserRouter basename={BASE_URL}>
-            <Toaster />
-            <AppRouting />
-          </BrowserRouter>
-        </LoadingBarContainer>
-      </HelmetProvider>
+      <Toaster />
+      {!ready ? null : session ? (
+        <LiveStatusPage session={session} onSignOut={() => setSession(null)} />
+      ) : (
+        <LoginPage onSignedIn={setSession} />
+      )}
     </ThemeProvider>
   );
 }
