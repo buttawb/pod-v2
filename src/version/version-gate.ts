@@ -1,6 +1,24 @@
 import { create } from 'zustand';
 import { APP_VERSION } from '../config';
 
+const GRACE_STARTED_KEY = 'version_grace_started_at';
+
+/**
+ * Persistence is injected rather than imported so this module stays free of
+ * native dependencies: the gate is pure decision logic and has to remain
+ * unit-testable off-device.
+ */
+export interface GraceStore {
+  read: (key: string) => Promise<string | null>;
+  write: (key: string, value: string) => Promise<void>;
+}
+
+let graceStore: GraceStore | null = null;
+
+export function configureGraceStore(store: GraceStore): void {
+  graceStore = store;
+}
+
 /**
  * Two levers, two severities:
  *  - minAppVersion  = "must update, humanely" -> grace until the route ends
@@ -50,13 +68,29 @@ export const useVersionGate = create<VersionGateStore>((set) => ({
       const belowMin = policy.minAppVersion
         ? compareSemver(APP_VERSION, policy.minAppVersion) < 0
         : false;
-      return {
-        ...policy,
-        graceStartedAt:
-          belowMin && state.graceStartedAt === null ? Date.now() : belowMin ? state.graceStartedAt : null,
-      };
+      if (!belowMin) {
+        if (state.graceStartedAt !== null) void graceStore?.write(GRACE_STARTED_KEY, '');
+        return { ...policy, graceStartedAt: null };
+      }
+      if (state.graceStartedAt !== null) return { ...policy, graceStartedAt: state.graceStartedAt };
+
+      // The grace clock is persisted, not held in memory: otherwise every
+      // relaunch would restart it and a driver could dodge a required
+      // update indefinitely by force-quitting the app.
+      const startedAt = Date.now();
+      void graceStore?.write(GRACE_STARTED_KEY, String(startedAt));
+      return { ...policy, graceStartedAt: startedAt };
     }),
 }));
+
+/** Restores the persisted grace clock during boot, before any gate is evaluated. */
+export async function restoreGraceClock(): Promise<void> {
+  const stored = (await graceStore?.read(GRACE_STARTED_KEY)) ?? null;
+  const startedAt = stored ? Number(stored) : Number.NaN;
+  if (Number.isFinite(startedAt) && startedAt > 0) {
+    useVersionGate.setState({ graceStartedAt: startedAt });
+  }
+}
 
 export function recordVersionHeaders(policy: VersionPolicy): void {
   if (!policy.minAppVersion && !policy.latestAppVersion && !policy.killSwitch) return;

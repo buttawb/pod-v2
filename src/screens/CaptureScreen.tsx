@@ -18,7 +18,7 @@ import {
   updateDraft,
   type PhotoRow,
 } from '../db/attempts-repo';
-import { capturePhoto, freeSpaceBytes, getCurrentFix, saveSignature } from '../capture/media';
+import { capturePhoto, deleteFile, freeSpaceBytes, getCurrentFix, saveSignature } from '../capture/media';
 import { syncEngine } from '../sync/sync-engine';
 import { SignaturePad } from '../capture/SignaturePad';
 import { BarcodeScanner } from '../capture/BarcodeScanner';
@@ -66,7 +66,21 @@ export function CaptureScreen({ stopId, onDone }: { stopId: string; onDone: () =
   }, [draftId]);
 
   const spec = outcome ? OUTCOME_SPECS[outcome] : null;
-  const photoCount = photos.filter((p) => p.kind === 'photo').length;
+  const photoRows = photos.filter((p) => p.kind === 'photo');
+  const photoCount = photoRows.length;
+
+  /**
+   * Lowest FREE index, never the count. After a delete the indexes are
+   * sparse, so reusing the count would silently overwrite an existing
+   * photo's file and row - destroying captured evidence with no warning.
+   */
+  const nextPhotoIndex = (): number => {
+    const used = new Set(photoRows.map((p) => p.photo_index));
+    for (let i = 0; i < MAX_PHOTOS_PER_ATTEMPT; i += 1) {
+      if (!used.has(i)) return i;
+    }
+    return -1;
+  };
 
   const violations = useMemo(() => {
     if (!outcome) return ['Choose what happened'];
@@ -81,7 +95,8 @@ export function CaptureScreen({ stopId, onDone }: { stopId: string; onDone: () =
   const onTakePhoto = async () => {
     if (!draftId) return;
     try {
-      const nextIndex = photoCount;
+      const nextIndex = nextPhotoIndex();
+      if (nextIndex < 0) return;
       const file = await capturePhoto(draftId, nextIndex);
       if (!file) return;
       await addPhoto({
@@ -248,20 +263,20 @@ export function CaptureScreen({ stopId, onDone }: { stopId: string; onDone: () =
                 {spec.photos.min > 0 ? ' (required)' : ' (optional)'}
               </Text>
               <View style={styles.photoRow}>
-                {photos
-                  .filter((p) => p.kind === 'photo')
-                  .map((photo) => (
+                {photoRows.map((photo) => (
                     <Pressable
                       key={photo.photo_index}
-                      onLongPress={() => {
-                        void removePhoto(photo.client_attempt_id, photo.photo_index).then(
-                          refreshPhotos,
-                        );
-                      }}
-                    >
-                      <Image source={{ uri: photo.local_path }} style={styles.photo} />
-                    </Pressable>
-                  ))}
+                    onLongPress={() => {
+                      // Row and file go together: a row-only delete would
+                      // leave the JPEG orphaned on the device forever.
+                      void removePhoto(photo.client_attempt_id, photo.photo_index)
+                        .then(() => deleteFile(photo.local_path))
+                        .then(refreshPhotos);
+                    }}
+                  >
+                    <Image source={{ uri: photo.local_path }} style={styles.photo} />
+                  </Pressable>
+                ))}
               </View>
               {photoCount < MAX_PHOTOS_PER_ATTEMPT ? (
                 <Button label="Take photo" variant="secondary" onPress={() => void onTakePhoto()} />

@@ -7,9 +7,10 @@ import {
   getAttempt,
   getPhotos,
   markNeedsAttention,
+  releaseForRetry,
   scheduleRetry,
   setPhotoState,
-  transition,
+  transitionTo,
   type AttemptRow,
   type PhotoRow,
 } from '../db/attempts-repo';
@@ -103,15 +104,32 @@ class SyncEngine {
 
     this.running = true;
     const generation = (this.generation += 1);
+    // One attempt that cannot progress must never strand the ones behind it:
+    // the queue is claimed oldest-first, so a single stuck row would
+    // otherwise block a whole day of evidence. Rows touched in this run are
+    // skipped rather than re-claimed, and the run ends when nothing new is
+    // left instead of at the first failure.
+    const touched = new Set<string>();
     try {
       for (;;) {
         if (generation !== this.generation) break;
-        const attempt = await claimNextWorkable();
+        const attempt = await claimNextWorkable(touched);
         if (!attempt) break;
+        touched.add(attempt.client_attempt_id);
 
-        const progressed = await this.processAttempt(attempt);
+        try {
+          await this.processAttempt(attempt);
+        } catch (err) {
+          // An unexpected throw must become a visible, driver-actionable
+          // row, never a silent stall of the entire queue.
+          await markNeedsAttention(
+            attempt.client_attempt_id,
+            FailureKind.Stuck,
+            'SYNC_INTERNAL',
+            err instanceof Error ? err.message : 'Internal sync error',
+          ).catch(() => undefined);
+        }
         this.notify();
-        if (!progressed) break; // backing off or blocked: stop churning
       }
     } finally {
       this.running = false;
@@ -131,7 +149,6 @@ class SyncEngine {
       // photo is gone and can capture a fresh attempt.
       await markNeedsAttention(
         attempt.client_attempt_id,
-        SyncState.Queued,
         FailureKind.EvidenceMissing,
         'EVIDENCE_FILE_MISSING',
         `${missing.length} evidence file(s) missing from this device`,
@@ -141,7 +158,7 @@ class SyncEngine {
 
     // Persist the phase BEFORE the network call: a kill mid-flight is
     // recovered by the startup sweep, and the re-send is idempotent.
-    if (!(await transition(attempt.client_attempt_id, SyncState.Queued, SyncState.Submitting))) {
+    if (!(await transitionTo(attempt.client_attempt_id, SyncState.Submitting))) {
       return true;
     }
 
@@ -174,7 +191,7 @@ class SyncEngine {
       });
       // A replay is success: the question is "does the server durably have
       // this?", not "was this the first delivery?".
-      await transition(attempt.client_attempt_id, SyncState.Submitting, SyncState.AttemptAcked, {
+      await transitionTo(attempt.client_attempt_id, SyncState.AttemptAcked, {
         server_attempt_id: result.attemptId,
         retry_count: 0,
         next_retry_at: null,
@@ -183,7 +200,7 @@ class SyncEngine {
       });
       return true;
     } catch (err) {
-      await this.handleFailure(attempt, SyncState.Submitting, SyncState.Queued, err);
+      await this.handleFailure(attempt, err);
       return false;
     }
   }
@@ -195,7 +212,7 @@ class SyncEngine {
     if (outstanding.length === 0) return this.finalize(attempt);
 
     if (attempt.sync_state === SyncState.AttemptAcked) {
-      await transition(attempt.client_attempt_id, SyncState.AttemptAcked, SyncState.UploadingMedia);
+      await transitionTo(attempt.client_attempt_id, SyncState.UploadingMedia);
     }
 
     let targets: UploadTarget[];
@@ -206,7 +223,7 @@ class SyncEngine {
         { method: 'POST' },
       );
     } catch (err) {
-      await this.handleFailure(attempt, SyncState.UploadingMedia, SyncState.AttemptAcked, err);
+      await this.handleFailure(attempt, err);
       return false;
     }
 
@@ -240,7 +257,6 @@ class SyncEngine {
     if (!fileExists(photo.local_path)) {
       await markNeedsAttention(
         attempt.client_attempt_id,
-        SyncState.UploadingMedia,
         FailureKind.EvidenceMissing,
         'EVIDENCE_FILE_MISSING',
         'An evidence file is missing from this device',
@@ -262,7 +278,7 @@ class SyncEngine {
       return true;
     } catch (err) {
       await setPhotoState(attempt.client_attempt_id, photo.photo_index, PhotoUploadState.Pending);
-      await this.handleFailure(attempt, SyncState.UploadingMedia, SyncState.AttemptAcked, err);
+      await this.handleFailure(attempt, err);
       return false;
     }
   }
@@ -272,11 +288,6 @@ class SyncEngine {
    * answer may move us to `synced` - that is what makes "On server" honest.
    */
   private async finalize(attempt: AttemptRow): Promise<boolean> {
-    const from =
-      attempt.sync_state === SyncState.AttemptAcked
-        ? SyncState.AttemptAcked
-        : SyncState.UploadingMedia;
-
     try {
       const result = await apiRequest<FinalizeResponse>(
         `/api/v2/attempts/${attempt.client_attempt_id}/finalize`,
@@ -284,11 +295,11 @@ class SyncEngine {
       );
 
       if (!result.attemptComplete) {
-        // Server is still owed something; come back after a backoff.
+        // Server is still owed something; come back after a backoff. The
+        // retry budget applies here too, so an object the server will never
+        // accept escalates to the driver instead of looping forever.
         await scheduleRetry(
           attempt.client_attempt_id,
-          from,
-          from === SyncState.AttemptAcked ? SyncState.UploadingMedia : SyncState.AttemptAcked,
           'MEDIA_INCOMPLETE',
           'Server has not verified all evidence yet',
         );
@@ -304,7 +315,7 @@ class SyncEngine {
           { confirmed_at: new Date().toISOString() },
         );
       }
-      await transition(attempt.client_attempt_id, from, SyncState.Synced, {
+      await transitionTo(attempt.client_attempt_id, SyncState.Synced, {
         synced_at: new Date().toISOString(),
         next_retry_at: null,
         last_error_code: null,
@@ -312,17 +323,12 @@ class SyncEngine {
       });
       return true;
     } catch (err) {
-      await this.handleFailure(attempt, from, SyncState.AttemptAcked, err);
+      await this.handleFailure(attempt, err);
       return false;
     }
   }
 
-  private async handleFailure(
-    attempt: AttemptRow,
-    from: SyncState,
-    retryTo: SyncState,
-    err: unknown,
-  ): Promise<void> {
+  private async handleFailure(attempt: AttemptRow, err: unknown): Promise<void> {
     const signal = {
       httpStatus: err instanceof ApiError ? err.status : undefined,
       networkError: err instanceof NetworkError,
@@ -336,12 +342,10 @@ class SyncEngine {
       case FailureClass.Offline:
       case FailureClass.AuthRefresh:
       case FailureClass.RefreshUrls:
-        // Nothing was really attempted (or it is fixable without the
-        // driver): return to a workable state without burning a retry.
-        await transition(attempt.client_attempt_id, from, retryTo, {
-          last_error_code: code,
-          last_error_message: message,
-        });
+        // Nothing was really attempted, or it is fixable without the driver.
+        // Leave the attempt workable and burn no retry budget; only the
+        // in-flight `submitting` state needs releasing so it is re-claimed.
+        await releaseForRetry(attempt.client_attempt_id, code, message);
         break;
 
       case FailureClass.Permanent:
@@ -350,7 +354,6 @@ class SyncEngine {
         // message. Park it, keep everything, tell the driver plainly.
         await markNeedsAttention(
           attempt.client_attempt_id,
-          from,
           FailureKind.Rejected,
           code,
           message,
@@ -358,7 +361,7 @@ class SyncEngine {
         break;
 
       default:
-        await scheduleRetry(attempt.client_attempt_id, from, retryTo, code, message);
+        await scheduleRetry(attempt.client_attempt_id, code, message);
     }
   }
 

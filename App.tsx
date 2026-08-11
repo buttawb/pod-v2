@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { openDatabase } from './src/db/schema';
+import { getMeta, openDatabase, setMeta } from './src/db/schema';
 import { runRecoverySweep } from './src/sync/recovery';
 import { syncEngine } from './src/sync/sync-engine';
 import { getSession, getSessionState, SessionState } from './src/auth/session';
@@ -13,7 +13,13 @@ import { StopDetailScreen } from './src/screens/StopDetailScreen';
 import { CaptureScreen } from './src/screens/CaptureScreen';
 import { UpdateRequiredScreen } from './src/screens/UpdateRequiredScreen';
 import { MapsScreen } from './src/screens/MapsScreen';
-import { gateLevel, GateLevel, useVersionGate } from './src/version/version-gate';
+import {
+  configureGraceStore,
+  gateLevel,
+  GateLevel,
+  restoreGraceClock,
+  useVersionGate,
+} from './src/version/version-gate';
 import { colors, spacing, type } from './src/ui/theme';
 
 type Route =
@@ -33,6 +39,8 @@ export default function App() {
     // reads it, and none of this requires a network.
     await openDatabase();
     await runRecoverySweep();
+    configureGraceStore({ read: getMeta, write: setMeta });
+    await restoreGraceClock();
 
     const session = await getSession();
     const state = await getSessionState();
@@ -66,7 +74,9 @@ export default function App() {
   }
 
   // A hard block still lets evidence upload: the screen itself drives sync.
-  if (gateLevel(gate) === GateLevel.Blocked) {
+  // It is shown only to a signed-in driver, because a blocked screen that
+  // cannot re-authenticate could never actually upload anything.
+  if (signedIn && gateLevel(gate) === GateLevel.Blocked) {
     return (
       <SafeAreaProvider>
         <SafeAreaView style={styles.safe}>

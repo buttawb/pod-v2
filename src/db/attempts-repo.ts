@@ -1,7 +1,7 @@
 import * as Crypto from 'expo-crypto';
 import { getDatabase } from './schema';
 import {
-  assertTransition,
+  canTransition,
   FailureKind,
   MAX_AUTO_RETRIES,
   PhotoUploadState,
@@ -178,13 +178,25 @@ export async function finalizeAttempt(clientAttemptId: string): Promise<boolean>
   return result.changes === 1;
 }
 
-export async function transition(
+/**
+ * The database row is the only authority on current state.
+ *
+ * Callers used to pass the state they believed the attempt was in, read
+ * from a row they had been holding across awaits. That row goes stale the
+ * moment any phase advances, and a stale `from` silently matches zero rows:
+ * the terminal transition to `synced` would no-op, leaving evidence the
+ * server had already verified stuck on the device forever. So `from` is
+ * read here, inside the same call that writes.
+ */
+export async function transitionTo(
   clientAttemptId: string,
-  from: SyncState,
   to: SyncState,
   extra: Partial<Record<string, string | number | null>> = {},
 ): Promise<boolean> {
-  assertTransition(from, to);
+  const attempt = await getAttempt(clientAttemptId);
+  if (!attempt) return false;
+  if (!canTransition(attempt.sync_state, to)) return false;
+
   const keys = Object.keys(extra);
   const setters = ['sync_state = ?', ...keys.map((k) => `${k} = ?`)].join(', ');
   const result = await getDatabase().runAsync(
@@ -192,15 +204,22 @@ export async function transition(
     to,
     ...keys.map((k) => extra[k] as never),
     clientAttemptId,
-    from,
+    attempt.sync_state,
   );
   return result.changes === 1;
 }
 
+/**
+ * Scheduling a retry is bookkeeping, not a state change.
+ *
+ * Modelling it as one forced illegal self-transitions (attempt_acked back to
+ * attempt_acked), which threw and took the whole sync worker down with it.
+ * An attempt that is already in a workable state simply gets its backoff
+ * updated; only the in-flight `submitting` state has to fall back to
+ * `queued` so the worker will pick it up again.
+ */
 export async function scheduleRetry(
   clientAttemptId: string,
-  from: SyncState,
-  to: SyncState,
   errorCode: string,
   errorMessage: string,
 ): Promise<void> {
@@ -209,25 +228,69 @@ export async function scheduleRetry(
 
   const retryCount = attempt.retry_count + 1;
   if (retryCount >= MAX_AUTO_RETRIES) {
-    await markNeedsAttention(clientAttemptId, from, FailureKind.Stuck, errorCode, errorMessage);
+    await markNeedsAttention(clientAttemptId, FailureKind.Stuck, errorCode, errorMessage);
     return;
   }
-  await transition(clientAttemptId, from, to, {
+
+  const backoff = {
     retry_count: retryCount,
     next_retry_at: new Date(Date.now() + backoffDelayMs(retryCount)).toISOString(),
     last_error_code: errorCode,
     last_error_message: errorMessage,
-  });
+  };
+
+  if (attempt.sync_state === SyncState.Submitting) {
+    await transitionTo(clientAttemptId, SyncState.Queued, backoff);
+    return;
+  }
+  await getDatabase().runAsync(
+    `UPDATE attempts SET retry_count = ?, next_retry_at = ?, last_error_code = ?,
+       last_error_message = ? WHERE client_attempt_id = ?`,
+    backoff.retry_count,
+    backoff.next_retry_at,
+    backoff.last_error_code,
+    backoff.last_error_message,
+    clientAttemptId,
+  );
+}
+
+/**
+ * A failure that was not really the attempt's fault (offline, an expired
+ * token, an expired presign). The attempt stays workable and burns no retry
+ * budget; only the in-flight `submitting` state has to be released so the
+ * worker can claim it again.
+ */
+export async function releaseForRetry(
+  clientAttemptId: string,
+  errorCode: string,
+  errorMessage: string,
+): Promise<void> {
+  const attempt = await getAttempt(clientAttemptId);
+  if (!attempt) return;
+
+  if (attempt.sync_state === SyncState.Submitting) {
+    await transitionTo(clientAttemptId, SyncState.Queued, {
+      last_error_code: errorCode,
+      last_error_message: errorMessage,
+    });
+    return;
+  }
+  await getDatabase().runAsync(
+    `UPDATE attempts SET last_error_code = ?, last_error_message = ?
+     WHERE client_attempt_id = ?`,
+    errorCode,
+    errorMessage,
+    clientAttemptId,
+  );
 }
 
 export async function markNeedsAttention(
   clientAttemptId: string,
-  from: SyncState,
   kind: FailureKind,
   errorCode: string,
   errorMessage: string,
 ): Promise<void> {
-  await transition(clientAttemptId, from, SyncState.NeedsAttention, {
+  await transitionTo(clientAttemptId, SyncState.NeedsAttention, {
     failure_kind: kind,
     last_error_code: errorCode,
     last_error_message: errorMessage,
@@ -241,7 +304,7 @@ export async function retryNow(clientAttemptId: string): Promise<void> {
   if (!attempt || attempt.sync_state !== SyncState.NeedsAttention) return;
 
   const resumeAt = attempt.server_attempt_id ? SyncState.AttemptAcked : SyncState.Queued;
-  await transition(clientAttemptId, SyncState.NeedsAttention, resumeAt, {
+  await transitionTo(clientAttemptId, resumeAt, {
     retry_count: 0,
     next_retry_at: null,
     failure_kind: null,
@@ -271,15 +334,24 @@ export async function setPhotoState(
   );
 }
 
-/** Next attempt the worker may act on, oldest capture first. */
-export async function claimNextWorkable(): Promise<AttemptRow | null> {
+/**
+ * Next attempt the worker may act on, oldest capture first.
+ *
+ * `skip` holds the rows already handled in this run, so one attempt that
+ * cannot progress does not block every attempt queued behind it.
+ */
+export async function claimNextWorkable(skip: Set<string> = new Set()): Promise<AttemptRow | null> {
+  const skipped = [...skip];
+  const placeholders = skipped.map(() => '?').join(',');
   return getDatabase().getFirstAsync<AttemptRow>(
     `SELECT * FROM attempts
      WHERE sync_state IN ('queued', 'attempt_acked', 'uploading_media')
        AND (next_retry_at IS NULL OR next_retry_at <= ?)
+       ${skipped.length > 0 ? `AND client_attempt_id NOT IN (${placeholders})` : ''}
      ORDER BY finalized_at ASC
      LIMIT 1`,
     new Date().toISOString(),
+    ...skipped,
   );
 }
 

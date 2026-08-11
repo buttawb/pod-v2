@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { KeyboardAvoidingView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { BottomBar, Button, Screen, colors, spacing, type } from '../ui/components';
 import { login } from '../auth/session';
+import { syncEngine } from '../sync/sync-engine';
 
 export function LoginScreen({ onSignedIn }: { onSignedIn: () => void }) {
   const [employeeRef, setEmployeeRef] = useState('');
@@ -14,6 +15,8 @@ export function LoginScreen({ onSignedIn }: { onSignedIn: () => void }) {
     setError(null);
     try {
       await login(employeeRef.trim(), password);
+      // Signing back in unfreezes a queue that a failed refresh had paused.
+      void syncEngine.kick();
       onSignedIn();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Sign in failed');
