@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -97,12 +97,19 @@ export class AuthService {
         await this.revokeFamily(stored.familyId);
         throw new UnauthorizedException('Refresh token reuse detected');
       }
-      if (stored.successorId) {
-        await this.refreshTokens.update(
-          { id: stored.successorId, status: RefreshTokenStatus.Active },
-          { status: RefreshTokenStatus.Revoked },
-        );
+      if (!stored.successorId) {
+        // Rotation is still in flight on another request/instance: its
+        // successor is not linked yet. Retrying is safe; guessing is not.
+        throw new ConflictException('Refresh in progress, retry');
       }
+      // Revoking the unclaimed successor IS the arbiter here: whoever wins
+      // this conditioned UPDATE is the single caller allowed to re-rotate,
+      // so two late replays cannot both mint a successor.
+      const revoked = await this.refreshTokens.update(
+        { id: stored.successorId, status: RefreshTokenStatus.Active },
+        { status: RefreshTokenStatus.Revoked },
+      );
+      if (revoked.affected !== 1) throw new ConflictException('Refresh in progress, retry');
       return this.rotate(stored);
     }
 
@@ -112,8 +119,12 @@ export class AuthService {
       { status: RefreshTokenStatus.Rotated, rotatedAt: new Date() },
     );
     if (claimed.affected !== 1) {
-      // Lost the race - re-read and fall through the rotated path above.
-      return this.refresh(refreshTokenPlain);
+      // A concurrent duplicate of an in-flight refresh (aggressive client
+      // retry, or two LB instances). The winner's successor is already on
+      // its way to this same client, so we must NOT fall into the
+      // lost-response path: that would revoke the live successor (logging
+      // the driver out mid-shift) or mint a second parallel active token.
+      throw new ConflictException('Refresh in progress, retry');
     }
     return this.rotate(stored);
   }

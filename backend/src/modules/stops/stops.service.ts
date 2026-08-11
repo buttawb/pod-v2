@@ -1,4 +1,9 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
 import { StopStatus } from '../../domain/outcomes';
@@ -79,6 +84,12 @@ export class StopsService {
   }
 
   async depotGeoJson(date?: string) {
+    // An unparseable date would otherwise surface as a Postgres cast error
+    // (500); reject it at the boundary instead.
+    if (date !== undefined && Number.isNaN(Date.parse(date))) {
+      throw new BadRequestException('date must be an ISO date');
+    }
+
     // Bounded to one day's stops - the depot's live working set. The GiST
     // geo index serves bbox queries if this ever needs viewport filtering.
     const rows = (await this.dataSource.query(
