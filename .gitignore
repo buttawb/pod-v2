@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Expo / native build output
+.expo/
+android/
+ios/
+dist/
+web-build/
+*.apk
+*.aab
+
+# Signing material never belongs in git
+*.keystore
+*.jks
+credentials.json
+
+# Env
+.env
+.env.*
+!.env.example
+
+# OS noise
+.DS_Store
+*.log
