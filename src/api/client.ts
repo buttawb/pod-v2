@@ -1,4 +1,4 @@
-import { getSession, refreshSession, clearAccessToken } from '../auth/session';
+import { getSession, refreshSession } from '../auth/session';
 import { recordVersionHeaders } from '../version/version-gate';
 
 import { API_BASE_URL, APP_VERSION } from '../config';
@@ -76,7 +76,11 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   if (response.status === 401 && auth && !options.isRetryAfterRefresh) {
     // Single-flight refresh, then replay exactly once. A failed refresh
     // freezes sync but never touches locally held evidence.
-    await clearAccessToken();
+    //
+    // The stored token is deliberately NOT cleared first: a concurrent
+    // request may have already refreshed and written a good token, and
+    // wiping it would send the replay out unauthenticated and cascade into
+    // a needless re-login.
     const refreshed = await refreshSession();
     if (refreshed) {
       return apiRequest<T>(path, { ...options, isRetryAfterRefresh: true });
