@@ -1,0 +1,61 @@
+# Production stack: Caddy load-balancing across two backend instances.
+# The brief says "assume it runs behind a load balancer with more than one
+# instance" — so we actually run two: idempotency and SSE fan-out are
+# exercised across instances, not just designed for it.
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pod_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend-1:
+    image: pod-backend:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      INSTANCE_ID: backend-1
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  backend-2:
+    image: pod-backend:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      INSTANCE_ID: backend-2
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./dashboard-dist:/srv/dashboard:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend-1
+      - backend-2
+
+volumes:
+  pod_pg:
+  caddy_data:
+  caddy_config:

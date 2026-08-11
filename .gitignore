@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Builds
+dist/
+build/
+*.apk
+*.aab
+app/android/app/build/
+app/.expo/
+
+# Env & secrets — never committed
+.env
+.env.*
+!.env.example
+*.pem
+*.keystore
+*.jks
+credentials.json
+
+# Terraform
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
+infra/terraform/*.tfvars
+!infra/terraform/example.tfvars
+infra/terraform/.terraform.lock.hcl
+
+# Logs & OS noise
+*.log
+.DS_Store
+
+# Test artifacts
+coverage/
+loadtest/results/*.json

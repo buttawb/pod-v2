@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pod
+      POSTGRES_PASSWORD: pod_dev_only
+      POSTGRES_DB: pod
+    ports:
+      - "5433:5432"
+    volumes:
+      - pod_pg_dev:/var/lib/postgresql/data
+
+volumes:
+  pod_pg_dev:

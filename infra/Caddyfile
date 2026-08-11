@@ -1,0 +1,25 @@
+{$DOMAIN} {
+	encode gzip
+
+	# API + SSE: round-robin across both backend instances.
+	# flush_interval -1 disables response buffering so SSE events stream.
+	handle /api/* {
+		reverse_proxy backend-1:3000 backend-2:3000 {
+			lb_policy round_robin
+			flush_interval -1
+			health_uri /api/health
+			health_interval 10s
+		}
+	}
+
+	handle /health {
+		reverse_proxy backend-1:3000 backend-2:3000
+	}
+
+	# Office dashboard: static SPA build.
+	handle {
+		root * /srv/dashboard
+		try_files {path} /index.html
+		file_server
+	}
+}
