@@ -20,7 +20,9 @@
 	# Play listing links to. Play re-checks the URL after launch and enforces
 	# against apps whose policy stops resolving, so it must not fall through
 	# to the SPA below, which would answer with the dashboard's login.
-	handle /privacy /privacy/ {
+	# A named matcher, because `handle` takes exactly one matcher token.
+	@privacy path /privacy /privacy/
+	handle @privacy {
 		rewrite * /api/privacy
 		reverse_proxy backend-1:3000 backend-2:3000 {
 			lb_policy round_robin

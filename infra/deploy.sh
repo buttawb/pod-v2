@@ -66,6 +66,27 @@ echo "==> Building image and starting stack"
 $SSH "cd ${REMOTE_DIR} && docker build -t pod-backend:latest backend/ \
   && docker compose -f docker-compose.prod.yml --env-file .env up -d --remove-orphans"
 
+# The Caddyfile is bind-mounted as a single FILE, and rsync ships a new file
+# then renames it into place. The rename gives it a fresh inode, and a bind
+# mount resolves its inode when the container is created - so the running
+# Caddy goes on serving the config it started with, and `compose up` sees no
+# reason to recreate it. Every Caddyfile change would silently not apply.
+#
+# Validating in a throwaway container first is what makes this safe: it mounts
+# the file that is actually on disk now, so a syntax error fails the deploy
+# here, with the site still up, rather than putting Caddy into a crash loop
+# where nothing is served at all. `set -e` does the aborting.
+echo "==> Validating Caddyfile"
+$SSH "cd ${REMOTE_DIR} && docker run --rm -e DOMAIN='${DOMAIN}' \
+  -v \"\$PWD/Caddyfile:/etc/caddy/Caddyfile:ro\" caddy:2-alpine \
+  caddy validate --config /etc/caddy/Caddyfile 2>&1 | tail -1"
+
+echo "==> Reloading Caddy onto the new config"
+# caddy_data is a named volume and is untouched, so issued TLS certificates
+# survive and nothing is re-requested from Let's Encrypt.
+$SSH "cd ${REMOTE_DIR} && docker compose -f docker-compose.prod.yml --env-file .env \
+  up -d --force-recreate caddy"
+
 if [[ "${*:-}" == *--migrate* ]]; then
   echo "==> Running migrations (as owner role)"
   $SSH "cd ${REMOTE_DIR} && docker compose -f docker-compose.prod.yml --env-file .env run --rm \
@@ -81,6 +102,10 @@ if [[ "${*:-}" == *--seed* ]]; then
 fi
 
 echo "==> Health"
-sleep 3
+sleep 5
 curl -fsS "https://${DOMAIN}/api/health" && echo
+# The privacy policy is what the Google Play listing points at, and Play
+# re-checks it after launch, so a deploy that leaves it unreachable is a
+# store-listing problem. Cheap to assert here; expensive to discover later.
+curl -fsS -o /dev/null "https://${DOMAIN}/privacy" && echo "privacy policy: ok"
 echo "==> Done: https://${DOMAIN}"
