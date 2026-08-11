@@ -7,14 +7,12 @@ import {
   setWorkerUrl,
 } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-// MapLibre resolves its worker at runtime from `import.meta.url`, which
-// after bundling points at a file Vite never emitted: the request fell
-// through the SPA rewrite to index.html and failed the module MIME check.
-// `?url` makes Vite emit the worker as a real asset and hand back its
-// hashed path.
-import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
 
-setWorkerUrl(maplibreWorkerUrl);
+// Served verbatim by the maplibre-worker-passthrough plugin in vite.config.ts,
+// which is also where the reasoning lives. Must be an absolute path: the
+// dashboard is a single-page app, so a relative one would resolve against
+// whatever route the operator happens to be on.
+setWorkerUrl(`${import.meta.env.BASE_URL}maplibre/maplibre-gl-worker.mjs`);
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { fetchDepotGeoJson, type DepotFeatureCollection } from './api';
@@ -77,7 +75,27 @@ export function DepotMapPage() {
     instance.addControl(new NavigationControl({ showCompass: false }), 'top-right');
     instance.addControl(new FullscreenControl(), 'top-right');
 
-    instance.on('load', () => {
+    // The map measures its container once, at construction. This card is laid
+    // out by flex inside a scroll area, so its final width often arrives a
+    // frame later; without this the canvas keeps whatever width it saw first
+    // and the rest of the card stays empty.
+    const resizeObserver = new ResizeObserver(() => instance.resize());
+    resizeObserver.observe(container.current);
+
+    // A style or tile failure is otherwise silent: the basemap background
+    // paints and the map simply stays empty, which reads as "no data".
+    instance.on('error', (event) => {
+      console.error('maplibre:', event.error?.message ?? event);
+    });
+
+    // `style.load`, not `load`. `load` waits for the style AND the sprite's
+    // image manager AND the first tile batch; against this basemap it never
+    // settles, so the source and layers were simply never added and the map
+    // showed a bare basemap with no errors. Adding layers only requires the
+    // style to be parsed, which is exactly what `style.load` reports.
+    instance.on('style.load', () => {
+      if (instance.getSource('stops')) return;
+
       instance.addSource('stops', {
         type: 'geojson',
         data: data as GeoJSON.FeatureCollection,
@@ -107,6 +125,9 @@ export function DepotMapPage() {
         filter: ['has', 'point_count'],
         layout: {
           'text-field': ['get', 'point_count_abbreviated'],
+          // Named explicitly: MapLibre's default stack is not one OpenFreeMap
+          // hosts, so the glyph request 404s and the counts render as nothing.
+          'text-font': ['Noto Sans Regular'],
           'text-size': 12,
           'text-allow-overlap': true,
         },
@@ -162,6 +183,7 @@ export function DepotMapPage() {
     });
 
     return () => {
+      resizeObserver.disconnect();
       instance.remove();
       map.current = null;
     };
