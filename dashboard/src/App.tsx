@@ -7,7 +7,8 @@ import { AttemptsPage } from '@/pod/AttemptsPage';
 import { DepotMapPage } from '@/pod/DepotMapPage';
 import { RolloutPage } from '@/pod/RolloutPage';
 import { AppShell, type Page } from '@/pod/AppShell';
-import { getStoredSession, type OfficeSession } from '@/pod/api';
+import { toast } from 'sonner';
+import { getStoredSession, onSessionExpired, type OfficeSession } from '@/pod/api';
 
 export function App() {
   const [session, setSession] = useState<OfficeSession | null>(null);
@@ -18,6 +19,14 @@ export function App() {
   useEffect(() => {
     setSession(getStoredSession());
     setReady(true);
+    // The session can end while the app is open, and until this existed the
+    // shell kept the stale session in state and carried on rendering pages
+    // whose requests all failed, which looked like an empty day rather than
+    // a sign-out.
+    return onSessionExpired(() => {
+      setSession(null);
+      toast.error('Your session expired. Please sign in again.');
+    });
   }, []);
 
   return (

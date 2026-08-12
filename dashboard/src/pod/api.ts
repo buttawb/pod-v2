@@ -45,7 +45,100 @@ export async function officeLogin(email: string, password: string): Promise<Offi
   return session;
 }
 
-async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
+const expiryListeners = new Set<() => void>();
+
+/**
+ * Fires when the session is definitively over, so the shell can return to the
+ * login screen. Without it the app kept the session in React state after the
+ * tokens were gone and carried on rendering empty pages, which reads as "no
+ * deliveries today" rather than "you are signed out".
+ */
+export function onSessionExpired(listener: () => void): () => void {
+  expiryListeners.add(listener);
+  return () => {
+    expiryListeners.delete(listener);
+  };
+}
+
+function endSession(): void {
+  clearSession();
+  for (const listener of expiryListeners) listener();
+}
+
+/**
+ * One refresh at a time, shared by every caller.
+ *
+ * Refresh tokens rotate, so a refresh is a single-use claim. When several
+ * requests expire together (this dashboard loads stats, attempts and the feed
+ * at once) each used to start its own: one won, and the rest got back 409
+ * "Refresh in progress, retry" from the server's rotation arbiter. The losers
+ * treated that as failure and cleared the session, wiping the winner's
+ * freshly stored tokens. That is how a healthy session ended up signed out,
+ * showing three 401s and a page of zeros.
+ */
+let inFlightRefresh: Promise<OfficeSession | null> | null = null;
+
+const REFRESH_CONFLICT_ATTEMPTS = 3;
+const REFRESH_RETRY_MS = 150;
+
+async function refreshSession(): Promise<OfficeSession | null> {
+  if (inFlightRefresh) return inFlightRefresh;
+
+  inFlightRefresh = (async () => {
+    try {
+      for (let attempt = 0; attempt < REFRESH_CONFLICT_ATTEMPTS; attempt += 1) {
+        // Re-read each pass: a concurrent winner may already have stored one.
+        const session = getStoredSession();
+        if (!session?.refreshToken) return null;
+
+        const response = await fetch(`${API_BASE}/api/v2/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refreshToken: session.refreshToken }),
+        });
+
+        if (response.ok) {
+          const tokens = (await response.json()) as {
+            accessToken: string;
+            refreshToken: string;
+          };
+          const next = { ...session, ...tokens };
+          storeSession(next);
+          return next;
+        }
+
+        // 409 is the server asking us to retry, not rejecting us: a rotation
+        // is in flight and its successor is not linked yet.
+        if (response.status === 409) {
+          await new Promise((resolve) => setTimeout(resolve, REFRESH_RETRY_MS * (attempt + 1)));
+          continue;
+        }
+
+        // 401 means revoked, or reuse detected and the family contained. That
+        // is the only answer that actually ends the session.
+        if (response.status === 401) {
+          endSession();
+          return null;
+        }
+
+        // Anything else (5xx, offline) is transient. Keep the tokens; they may
+        // work again once the backend is reachable.
+        return null;
+      }
+      return null;
+    } finally {
+      inFlightRefresh = null;
+    }
+  })();
+
+  return inFlightRefresh;
+}
+
+async function authedFetch(
+  path: string,
+  init: RequestInit = {},
+  retryAfterRefresh = true,
+): Promise<Response> {
   const session = getStoredSession();
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
@@ -56,20 +149,14 @@ async function authedFetch(path: string, init: RequestInit = {}): Promise<Respon
     },
   });
 
-  if (response.status === 401 && session?.refreshToken) {
-    const refreshed = await fetch(`${API_BASE}/api/v2/auth/refresh`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken: session.refreshToken }),
-    });
-    if (refreshed.ok) {
-      const tokens = (await refreshed.json()) as { accessToken: string; refreshToken: string };
-      storeSession({ ...session, ...tokens });
-      return authedFetch(path, init);
-    }
-    clearSession();
-  }
-  return response;
+  if (response.status !== 401 || !retryAfterRefresh) return response;
+
+  const refreshed = await refreshSession();
+  if (!refreshed) return response;
+
+  // Exactly one retry: if the brand-new token is also rejected, something is
+  // wrong that another round trip will not fix.
+  return authedFetch(path, init, false);
 }
 
 export interface TodayStats {
@@ -175,20 +262,54 @@ export interface AttemptEvent {
  * from the table and no event is lost in the gap.
  */
 export function openFeed(onEvent: (event: AttemptEvent) => void): () => void {
-  const session = getStoredSession();
-  const source = new EventSource(
-    `${API_BASE}/api/v2/office/feed?access_token=${encodeURIComponent(session?.accessToken ?? '')}`,
-  );
+  let source: EventSource | null = null;
+  let lastEventId: string | null = null;
+  let retry: ReturnType<typeof setTimeout> | null = null;
+  let closed = false;
 
-  source.addEventListener('attempt', (event) => {
-    try {
-      onEvent(JSON.parse((event as MessageEvent<string>).data) as AttemptEvent);
-    } catch {
-      // A malformed frame is not worth tearing the feed down for.
-    }
-  });
+  const connect = () => {
+    if (closed) return;
+    const session = getStoredSession();
 
-  return () => source.close();
+    // The token is in the URL, so a rotation cannot be applied to a live
+    // connection: EventSource would keep reconnecting with the expired one
+    // forever. We reconnect ourselves instead, which means we also have to
+    // carry the cursor by hand, since only EventSource's own reconnects set
+    // the Last-Event-ID header.
+    const params = new URLSearchParams({ access_token: session?.accessToken ?? '' });
+    if (lastEventId) params.set('last_event_id', lastEventId);
+
+    source = new EventSource(`${API_BASE}/api/v2/office/feed?${params.toString()}`);
+
+    source.addEventListener('attempt', (event) => {
+      const message = event as MessageEvent<string>;
+      if (message.lastEventId) lastEventId = message.lastEventId;
+      try {
+        onEvent(JSON.parse(message.data) as AttemptEvent);
+      } catch {
+        // A malformed frame is not worth tearing the feed down for.
+      }
+    });
+
+    source.addEventListener('error', () => {
+      if (closed) return;
+      source?.close();
+      // Most likely the access token just expired. Refreshing is shared with
+      // every other caller, so this costs nothing when one is already running.
+      void refreshSession().then(() => {
+        if (closed) return;
+        retry = setTimeout(connect, 1000);
+      });
+    });
+  };
+
+  connect();
+
+  return () => {
+    closed = true;
+    if (retry) clearTimeout(retry);
+    source?.close();
+  };
 }
 
 export interface VersionPolicy {

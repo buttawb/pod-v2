@@ -34,11 +34,22 @@ export class OfficeController {
    * Live status feed. Reconnects carry Last-Event-ID: we first replay from
    * the table (the source of truth), then switch to live doorbell events -
    * LISTEN/NOTIFY's at-most-once delivery costs nothing.
+   *
+   * That header is set automatically only on EventSource's own reconnects. A
+   * client that has to construct a fresh EventSource cannot set it, and this
+   * one has to: the access token rides in the URL and a live connection's URL
+   * cannot be changed, so every token rotation forces a reopen. The same
+   * cursor is therefore accepted as a query parameter, otherwise each
+   * rotation would silently drop whatever arrived during the gap.
    */
   @AllowQueryToken()
   @Sse('feed')
-  feed(@Req() req: Request): Observable<MessageEvent> {
-    const lastEventId = req.headers['last-event-id'];
+  feed(
+    @Req() req: Request,
+    @Query('last_event_id') lastEventIdParam?: string,
+  ): Observable<MessageEvent> {
+    const header = req.headers['last-event-id'];
+    const lastEventId = typeof header === 'string' ? header : lastEventIdParam;
     const cursor = typeof lastEventId === 'string' ? decodeCursor(lastEventId) : null;
     return this.officeService.feed(cursor);
   }
