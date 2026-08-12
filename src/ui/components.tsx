@@ -53,12 +53,15 @@ export function useKeyboardInset(): number {
 export function Screen({ children, plain }: { children: ReactNode; plain?: boolean }) {
   const keyboard = useKeyboardInset();
 
-  // Lift by the full keyboard height, nothing clever. An earlier version took
-  // the bottom safe-area inset off here on the grounds that BottomBar pads for
-  // it separately, which left the Complete button clipped by exactly that
-  // much: the bar's own padding sits inside the bar and moves its contents up
-  // from an edge that was itself still under the keyboard. BottomBar drops its
-  // inset while the keyboard is open instead, so the two never double count.
+  // The whole screen moves up by the keyboard's measured height, and every
+  // child keeps the spacing it already had. No per-screen padding, no numbers
+  // invented here: this is the one place that knows the keyboard exists.
+  //
+  // Two earlier attempts got this wrong by trying to be clever about the
+  // bottom safe-area inset, once subtracting it from the lift and once
+  // stripping it from BottomBar. Both left the Complete button flush against
+  // the keys, because the bar's own padding is what should provide that gap
+  // and both versions cancelled it out.
   return (
     <View
       style={[
@@ -145,16 +148,8 @@ export function PageHeader({
 export function BottomBar({ children }: { children: ReactNode }) {
   const insets = useSafeAreaInsets();
   const edge = useEdgePadding();
-  const keyboard = useKeyboardInset();
-
-  // The bottom inset clears the navigation bar. With the keyboard open there
-  // is no navigation bar to clear: the keyboard is drawn over it, and Screen
-  // has already lifted this whole bar above the keyboard. Keeping the inset
-  // then adds a second gap and pushes the button back under the keys.
-  const paddingBottom = keyboard > 0 ? spacing.md : Math.max(insets.bottom, spacing.md);
-
   return (
-    <View style={[styles.bottomBar, edge, { paddingBottom }]}>
+    <View style={[styles.bottomBar, edge, { paddingBottom: Math.max(insets.bottom, spacing.md) }]}>
       <View style={styles.bottomBarInner}>{children}</View>
     </View>
   );
