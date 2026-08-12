@@ -1,19 +1,19 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
+  Modal,
   Pressable,
   RefreshControl,
-  ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { TOUCH_TARGET } from '../ui/theme';
 import {
   Banner,
   Card,
-  Chip,
   EmptyState,
   Input,
   PageHeader,
@@ -24,6 +24,7 @@ import {
   SyncBadge,
   colors,
   radius,
+  shadow,
   spacing,
   type,
 } from '../ui/components';
@@ -59,6 +60,33 @@ const DONE_STATUSES = new Set(['delivered', 'failed']);
  * to an unrelated row.
  */
 let rememberedOffset = 0;
+
+/**
+ * Placeholder rows for the only case that warrants them: nothing to show yet.
+ *
+ * A skeleton stands in for content that is coming. Once the round is on the
+ * phone there is real content, and swapping 151 known stops for grey bars on
+ * every pull would be worse than the spinner alone: the driver pulled to
+ * refresh while looking at something, and taking it away mid-read answers a
+ * question they were not asking.
+ */
+function StopListSkeleton() {
+  return (
+    <View style={styles.skeletonList}>
+      {[0, 1, 2, 3, 4, 5].map((row) => (
+        <Card key={row}>
+          <View style={styles.row}>
+            <View style={[styles.seq, styles.skeletonBlock]} />
+            <View style={styles.details}>
+              <View style={[styles.skeletonBlock, styles.skeletonLineWide]} />
+              <View style={[styles.skeletonBlock, styles.skeletonLineNarrow]} />
+            </View>
+          </View>
+        </Card>
+      ))}
+    </View>
+  );
+}
 
 /**
  * One stop, memoized.
@@ -172,8 +200,17 @@ export function StopListScreen({
     visible: false,
   });
   const [refreshing, setRefreshing] = useState(false);
+  const [offlineNote, setOfflineNote] = useState(false);
+  // First load only. Replacing a full round with placeholders on every pull
+  // would take away the data the driver is using to answer a question they
+  // already had; a skeleton is for when there is genuinely nothing to show.
+  const [everLoaded, setEverLoaded] = useState(false);
   const [filter, setFilter] = useState<StopFilter>(StopFilter.All);
   const [query, setQuery] = useState('');
+  const [menuOpen, setMenuOpen] = useState(false);
+  // Measured rather than guessed, so the menu hangs off the row wherever the
+  // header ends up on a given handset.
+  const [menuTop, setMenuTop] = useState(0);
 
   const narrow = useCallback((next: StopFilter | null, text: string | null) => {
     // A remembered offset belongs to the list it was measured on.
@@ -207,6 +244,7 @@ export function StopListScreen({
   // Everything renders from SQLite; the network only ever updates the cache.
   const load = useCallback(async () => {
     setStops(await getTodayStops());
+    setEverLoaded(true);
     const counts = await syncCounts();
     const needsReauth = (await getSessionState()) === SessionState.NeedsReauth;
     setBanner(syncBanner(counts, syncEngine.isOnline(), needsReauth));
@@ -219,10 +257,19 @@ export function StopListScreen({
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    setOfflineNote(false);
     try {
-      // Pull-to-sync means exactly that: fetch the route AND push evidence.
-      await refreshTodayStops().catch(() => undefined);
-      await syncEngine.kick();
+      if (syncEngine.isOnline()) {
+        // Pull-to-sync means exactly that: fetch the route AND push evidence.
+        await refreshTodayStops().catch(() => undefined);
+        await syncEngine.kick();
+      } else {
+        // Offline is not an error and must not read like one. The round is
+        // already on this phone, so a pull re-reads it and says plainly that
+        // nothing was fetched, rather than spinning at a network that is not
+        // there or blanking the list the driver is working from.
+        setOfflineNote(true);
+      }
       await load();
     } finally {
       setRefreshing(false);
@@ -253,43 +300,101 @@ export function StopListScreen({
       />
 
       {banner.visible ? <Banner label={banner.label} tone={banner.tone} /> : null}
+      {offlineNote ? (
+        <Banner label="No signal. Showing the round saved on this phone." tone="neutral" />
+      ) : null}
 
-      <View style={[styles.search, edge]}>
-        <Input
-          value={query}
-          onChangeText={(text) => narrow(null, text)}
-          placeholder="Search address or postcode"
-          autoCapitalize="none"
-          autoCorrect={false}
-          clearButtonMode="while-editing"
-        />
+      {/* Filter lives in the search row, not in a band of pills below it.
+          A row of chips cost a permanent strip of vertical space on a screen
+          whose entire job is showing as many stops as possible, and it grew
+          with every filter added. */}
+      <View
+        style={[styles.searchRow, edge]}
+        onLayout={(event) => {
+          const { y, height } = event.nativeEvent.layout;
+          setMenuTop(y + height);
+        }}
+      >
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Filter: ${STOP_FILTER_LABELS[filter]}`}
+          onPress={() => setMenuOpen(true)}
+          style={[styles.filterButton, filter !== StopFilter.All && styles.filterButtonActive]}
+        >
+          <Feather
+            name="filter"
+            size={18}
+            color={filter === StopFilter.All ? colors.textMuted : colors.primary}
+          />
+        </Pressable>
+
+        <View style={styles.searchField}>
+          <Input
+            value={query}
+            onChangeText={(text) => narrow(null, text)}
+            placeholder="Search address or postcode"
+            autoCapitalize="none"
+            autoCorrect={false}
+            clearButtonMode="while-editing"
+          />
+        </View>
       </View>
 
-      {/* The round is ordered by sequence, which is the order the van drives
-          and the wrong order for "what have I not done". Filtering is local:
-          every field these read is already on the row, so it works with no
-          signal, which is where a driver most needs to ask the question. */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        // A horizontal ScrollView is still a flex child of a column, and
-        // without this it grows into whatever space the list below is not
-        // using. With 151 rows there is none, so it looked correct; filter
-        // down to one row and the chips floated in the middle of the screen
-        // with a void above and below them.
-        style={styles.filterBar}
-        contentContainerStyle={[styles.filters, edge]}
-        keyboardShouldPersistTaps="handled"
-      >
-        {STOP_FILTER_ORDER.map((option) => (
-          <Chip
-            key={option}
-            label={`${STOP_FILTER_LABELS[option]} ${filterCounts[option]}`}
-            selected={filter === option}
-            onPress={() => narrow(option, null)}
-          />
-        ))}
-      </ScrollView>
+      {/* An active filter has to be legible without opening the menu: a funnel
+          icon alone does not say what is being hidden, and a driver who cannot
+          see that 148 stops are filtered out will think the round is finished. */}
+      {filter !== StopFilter.All ? (
+        <Pressable style={[styles.activeFilter, edge]} onPress={() => narrow(StopFilter.All, null)}>
+          <Text style={styles.activeFilterText}>
+            {STOP_FILTER_LABELS[filter]}  ·  {filterCounts[filter]} of {stops.length}
+          </Text>
+          <Feather name="x" size={14} color={colors.primary} />
+        </Pressable>
+      ) : null}
+
+      {menuOpen ? (
+        <Modal transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
+          {/* The backdrop is the dismiss target, so a tap anywhere outside
+              closes it rather than trapping the driver in a menu. */}
+          <Pressable style={styles.menuBackdrop} onPress={() => setMenuOpen(false)}>
+            <View
+              style={[
+                styles.menuPanel,
+                { top: menuTop + insets.top, left: insets.left + spacing.md },
+              ]}
+            >
+              {STOP_FILTER_ORDER.map((option) => {
+                const selected = option === filter;
+                return (
+                  <Pressable
+                    key={option}
+                    accessibilityRole="menuitem"
+                    accessibilityState={{ selected }}
+                    onPress={() => {
+                      narrow(option, null);
+                      setMenuOpen(false);
+                    }}
+                    style={({ pressed }) => [
+                      styles.menuItem,
+                      pressed && { backgroundColor: colors.secondary },
+                    ]}
+                  >
+                    <Feather
+                      name={selected ? 'check' : 'chevron-right'}
+                      size={16}
+                      color={selected ? colors.primary : colors.textSubtle}
+                    />
+                    <Text style={[styles.menuLabel, selected && styles.menuLabelSelected]}>
+                      {STOP_FILTER_LABELS[option]}
+                    </Text>
+                    <Text style={styles.menuCount}>{filterCounts[option]}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </Pressable>
+        </Modal>
+      ) : null}
 
       <FlatList
         ref={listRef}
@@ -322,7 +427,9 @@ export function StopListScreen({
           ) : null
         }
         ListEmptyComponent={
-          filter !== StopFilter.All ? (
+          !everLoaded || (refreshing && stops.length === 0) ? (
+            <StopListSkeleton />
+          ) : filter !== StopFilter.All ? (
             <EmptyState
               icon="filter"
               title="Nothing under this filter"
@@ -376,8 +483,60 @@ const styles = StyleSheet.create({
   // A stop dispatch pulled before anyone worked it. Receded, not hidden:
   // the driver should still see it was on the round this morning.
   search: { paddingTop: spacing.sm },
-  filterBar: { flexGrow: 0, flexShrink: 0 },
-  filters: { gap: spacing.sm, paddingVertical: spacing.sm, alignItems: 'center' },
+  skeletonList: { gap: spacing.sm },
+  skeletonBlock: { backgroundColor: colors.secondary, borderRadius: radius.sm },
+  skeletonLineWide: { height: 15, width: '72%' },
+  skeletonLineNarrow: { height: 12, width: '40%', marginTop: 6 },
+
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingTop: spacing.sm,
+  },
+  searchField: { flex: 1 },
+  filterButton: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.secondary,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  filterButtonActive: { borderColor: colors.primary, backgroundColor: colors.background },
+
+  activeFilter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingTop: spacing.sm,
+  },
+  activeFilterText: { color: colors.primary, fontSize: 13, fontWeight: '700' },
+
+  menuBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.25)' },
+  menuPanel: {
+    position: 'absolute',
+    minWidth: 240,
+    backgroundColor: colors.card,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: spacing.xs,
+    ...shadow.card,
+  },
+  menuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    minHeight: TOUCH_TARGET,
+  },
+  menuLabel: { flex: 1, fontSize: 15, fontWeight: '600', color: colors.text },
+  menuLabelSelected: { color: colors.primary },
+  menuCount: { fontSize: 13, fontWeight: '700', color: colors.textMuted },
   rowWithdrawn: { opacity: 0.45 },
   badgeRow: { marginTop: 6 },
 });
