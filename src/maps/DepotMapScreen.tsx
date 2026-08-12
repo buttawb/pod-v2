@@ -11,7 +11,9 @@ import {
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { apiRequest } from '../api/client';
-import { colors, radius, shadow, spacing, type } from '../ui/components';
+import { getTodayStops, type StopWithSync } from '../db/stops-repo';
+import { Button, colors, radius, shadow, spacing, type } from '../ui/components';
+import { navigateTo } from './navigate-to';
 import {
   ATTRIBUTION,
   BASEMAP_STYLE_URL,
@@ -25,7 +27,7 @@ import {
   StatusCode,
 } from './basemap';
 import type { NativeSyntheticEvent } from 'react-native';
-import type { ViewStateChangeEvent } from '@maplibre/maplibre-react-native';
+import type { PressEventWithFeatures, ViewStateChangeEvent } from '@maplibre/maplibre-react-native';
 
 interface DepotResponse {
   type: 'FeatureCollection';
@@ -58,6 +60,15 @@ const SETTLE_MS = 350;
 
 const EMPTY: DepotResponse = { type: 'FeatureCollection', mode: 'points', features: [] };
 
+interface SelectedPin {
+  id: string;
+  lat: number;
+  lng: number;
+  status: StatusCode;
+  /** Non-null only when this stop is on the signed-in driver's own round. */
+  mine: StopWithSync | null;
+}
+
 /**
  * The depot's coverage, loaded a viewport at a time.
  *
@@ -72,7 +83,13 @@ const EMPTY: DepotResponse = { type: 'FeatureCollection', mode: 'points', featur
  * is the trade: it costs a request per settled gesture, and it means a low-end
  * phone never parses or holds a payload that grows with the fleet.
  */
-export function DepotMapScreen({ onBack }: { onBack: () => void }) {
+export function DepotMapScreen({
+  onBack,
+  onOpenStop,
+}: {
+  onBack: () => void;
+  onOpenStop: (stopId: string) => void;
+}) {
   const insets = useSafeAreaInsets();
   const [data, setData] = useState<DepotResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -80,6 +97,7 @@ export function DepotMapScreen({ onBack }: { onBack: () => void }) {
   const [selected, setSelected] = useState<Set<StatusCode>>(new Set(ALL_STATUSES));
   const cameraRef = useRef<CameraRef>(null);
   const mapRef = useRef<MapRef>(null);
+  const [pin, setPin] = useState<SelectedPin | null>(null);
 
   const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const viewport = useRef<{ bbox: string; zoom: number } | null>(null);
@@ -154,6 +172,37 @@ export function DepotMapScreen({ onBack }: { onBack: () => void }) {
     [],
   );
 
+  /**
+   * A cell zooms in; a stop opens its detail.
+   *
+   * Which stop detail a driver may see is decided here, without asking the
+   * server anything: the round already lives in SQLite, so a stop that matches
+   * one of ours resolves to a full address offline. Anything else belongs to
+   * another driver's round and stays what the map payload already said it was,
+   * a coordinate and a status. That keeps the promise the payload makes, which
+   * is that this screen shows the shape of the day and never becomes a
+   * directory of who is delivering where.
+   */
+  const onPress = useCallback(
+    async (event: NativeSyntheticEvent<PressEventWithFeatures>) => {
+      const feature = event.nativeEvent.features[0];
+      if (!feature) return;
+      const props = feature.properties as { id?: string; s?: StatusCode; point_count?: number };
+      const [lng, lat] = (feature.geometry as GeoJSON.Point).coordinates;
+
+      if (props.point_count !== undefined) {
+        const zoom = viewport.current?.zoom ?? DEPOT_ZOOM;
+        cameraRef.current?.easeTo({ center: [lng, lat], zoom: Math.min(zoom + 2, 16), duration: 400 });
+        return;
+      }
+      if (!props.id) return;
+
+      const mine = (await getTodayStops()).find((s) => s.stop_id === props.id) ?? null;
+      setPin({ id: props.id, lat, lng, status: props.s ?? StatusCode.Pending, mine });
+    },
+    [],
+  );
+
   const toggle = useCallback((status: StatusCode) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -184,7 +233,7 @@ export function DepotMapScreen({ onBack }: { onBack: () => void }) {
 
         {/* One source, reshaped by the server. Nothing is clustered on the
             device, so panning costs no JavaScript beyond the fetch. */}
-        <GeoJSONSource id="depot" data={collection as never} cluster={false}>
+        <GeoJSONSource id="depot" data={collection as never} cluster={false} onPress={onPress}>
           <Layer
             id="depot-cells"
             type="circle"
@@ -208,6 +257,14 @@ export function DepotMapScreen({ onBack }: { onBack: () => void }) {
               'text-allow-overlap': true,
             }}
             paint={{ 'text-color': '#FFFFFF' }}
+          />
+          {/* Invisible, wider circle under the visible one: a 5dp dot is far
+              below a fingertip, and hit testing uses the painted radius. */}
+          <Layer
+            id="depot-stops-touch"
+            type="circle"
+            filter={['!', ['has', 'point_count']] as never}
+            paint={{ 'circle-color': '#000000', 'circle-opacity': 0, 'circle-radius': 14 }}
           />
           <Layer
             id="depot-stops"
@@ -306,6 +363,62 @@ export function DepotMapScreen({ onBack }: { onBack: () => void }) {
         ) : null}
       </View>
 
+      {pin ? (
+        <View
+          style={[
+            styles.sheet,
+            {
+              paddingBottom: Math.max(insets.bottom, spacing.md),
+              left: insets.left + spacing.md,
+              right: insets.right + spacing.md,
+            },
+          ]}
+        >
+          <View style={styles.sheetHead}>
+            <View style={[styles.sheetDot, { backgroundColor: STATUS_COLORS[pin.status] }]} />
+            <View style={styles.sheetText}>
+              <Text style={type.bodyStrong} numberOfLines={2}>
+                {pin.mine ? pin.mine.address : STATUS_LABELS[pin.status]}
+              </Text>
+              <Text style={type.meta}>
+                {pin.mine
+                  ? `${pin.mine.postcode}  ·  your stop ${pin.mine.seq}`
+                  : 'On another driver’s round'}
+              </Text>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Close"
+              hitSlop={10}
+              onPress={() => setPin(null)}
+            >
+              <Feather name="x" size={20} color={colors.textMuted} />
+            </Pressable>
+          </View>
+
+          <View style={styles.sheetActions}>
+            <View style={styles.sheetAction}>
+              <Button
+                label="Navigate"
+                icon="corner-up-right"
+                variant={pin.mine ? 'primary' : 'secondary'}
+                onPress={() => void navigateTo(pin.lat, pin.lng, pin.mine?.address)}
+              />
+            </View>
+            {pin.mine ? (
+              <View style={styles.sheetAction}>
+                <Button
+                  label="Open stop"
+                  icon="clipboard"
+                  variant="secondary"
+                  onPress={() => onOpenStop(pin.id)}
+                />
+              </View>
+            ) : null}
+          </View>
+        </View>
+      ) : null}
+
       <Text
         style={[
           styles.attribution,
@@ -374,6 +487,22 @@ const styles = StyleSheet.create({
     ...shadow.card,
   },
   noticeText: { fontSize: 12, fontWeight: '500', color: colors.text },
+
+  sheet: {
+    position: 'absolute',
+    bottom: 0,
+    marginBottom: spacing.lg,
+    padding: spacing.md,
+    gap: spacing.md,
+    borderRadius: radius.xl,
+    backgroundColor: colors.background,
+    ...shadow.raised,
+  },
+  sheetHead: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  sheetDot: { width: 12, height: 12, borderRadius: 6 },
+  sheetText: { flex: 1, gap: 2 },
+  sheetActions: { flexDirection: 'row', gap: spacing.sm },
+  sheetAction: { flex: 1 },
 
   attribution: {
     position: 'absolute',

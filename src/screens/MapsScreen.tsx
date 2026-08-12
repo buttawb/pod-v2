@@ -37,7 +37,7 @@ export function MapsScreen({
     return <RouteMapScreen onOpenStop={onOpenStop} onBack={() => setSurface('menu')} />;
   }
   if (surface === 'depot') {
-    return <DepotMapScreen onBack={() => setSurface('menu')} />;
+    return <DepotMapScreen onOpenStop={onOpenStop} onBack={() => setSurface('menu')} />;
   }
 
   return (
