@@ -1,4 +1,4 @@
-import { attemptBadge, syncBanner, worstState } from './badges';
+import { attemptBadge, secondsUntilRetry, syncBanner, worstState } from './badges';
 import { SyncState } from './state-machine';
 
 /**
@@ -70,5 +70,53 @@ describe('global banner', () => {
 
   it('asks for sign-in without implying evidence was lost', () => {
     expect(syncBanner(clear, true, true).label).toBe('Sign in to resume syncing');
+  });
+});
+
+/**
+ * Three states, told apart honestly.
+ *
+ * An attempt parked behind a backoff used to render as "Evidence uploading",
+ * which is how one that had stopped making progress still looked busy. The
+ * driver could not tell work in flight from a wait from a dead end.
+ */
+describe('uploading, retrying and parked are distinguishable', () => {
+  const NOW = Date.parse('2026-08-12T10:00:00.000Z');
+
+  it('reads as uploading only while something is actually in flight', () => {
+    expect(
+      attemptBadge(SyncState.UploadingMedia, { confirmed: 1, total: 2 }, true, null).label,
+    ).toBe('Evidence uploading 1/2');
+  });
+
+  it('counts down instead of claiming to be uploading while it waits', () => {
+    const badge = attemptBadge(
+      SyncState.UploadingMedia,
+      { confirmed: 1, total: 2 },
+      true,
+      secondsUntilRetry('2026-08-12T10:00:05.000Z', NOW),
+    );
+    expect(badge.label).toBe('Retrying in 5s');
+  });
+
+  it('says needs attention when nothing further will happen on its own', () => {
+    expect(attemptBadge(SyncState.NeedsAttention, { confirmed: 0, total: 2 }, true, null)).toEqual({
+      label: 'Needs attention',
+      tone: 'alert',
+    });
+  });
+
+  it('treats a due or absent retry as not waiting', () => {
+    expect(secondsUntilRetry(null, NOW)).toBeNull();
+    expect(secondsUntilRetry('2026-08-12T09:59:59.000Z', NOW)).toBeNull();
+    expect(secondsUntilRetry('not a date', NOW)).toBeNull();
+  });
+
+  it('rounds up, so a retry that is nearly due never reads as 0s', () => {
+    expect(secondsUntilRetry('2026-08-12T10:00:00.400Z', NOW)).toBe(1);
+  });
+
+  it('clamps a backwards clock jump instead of counting down for a year', () => {
+    expect(secondsUntilRetry('2027-08-12T10:00:00.000Z', NOW)).toBe(3600);
   });
 });

@@ -18,7 +18,7 @@ import {
   spacing,
   type,
 } from '../ui/components';
-import { attemptBadge } from '../sync/badges';
+import { attemptBadge, secondsUntilRetry } from '../sync/badges';
 import { getStop, type StopRow } from '../db/stops-repo';
 import { getDatabase } from '../db/schema';
 import { getDraftForStop, getPhotos, retryNow } from '../db/attempts-repo';
@@ -36,6 +36,7 @@ interface AttemptSummary {
   captured_at: string;
   sync_state: SyncState;
   last_error_message: string | null;
+  next_retry_at: string | null;
   confirmed: number;
   total: number;
 }
@@ -60,7 +61,7 @@ export function StopDetailScreen({
     setAttempts(
       await getDatabase().getAllAsync<AttemptSummary>(
         `SELECT a.client_attempt_id, a.attempt_no, a.outcome, a.captured_at, a.sync_state,
-                a.last_error_message,
+                a.last_error_message, a.next_retry_at,
                 (SELECT count(*) FROM attempt_photos p
                   WHERE p.client_attempt_id = a.client_attempt_id AND p.upload_state = 'confirmed') AS confirmed,
                 (SELECT count(*) FROM attempt_photos p
@@ -83,6 +84,17 @@ export function StopDetailScreen({
     void load();
     return syncEngine.subscribe(() => void load());
   }, [load]);
+
+  // A countdown that does not count down is worse than no countdown: it reads
+  // as a stalled attempt. The ticker runs only while something is actually
+  // waiting, so an idle stop costs nothing.
+  const [, setTick] = useState(0);
+  const waiting = attempts.some((a) => secondsUntilRetry(a.next_retry_at) !== null);
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(timer);
+  }, [waiting]);
 
   const captureBlocked = gateLevel(gate) === GateLevel.Blocked;
 
@@ -146,6 +158,7 @@ export function StopDetailScreen({
                     attempt.sync_state,
                     { confirmed: attempt.confirmed, total: attempt.total },
                     syncEngine.isOnline(),
+                    secondsUntilRetry(attempt.next_retry_at),
                   )}
                 />
               </View>

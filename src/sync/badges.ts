@@ -11,15 +11,36 @@ export interface Badge {
   tone: 'neutral' | 'progress' | 'good' | 'alert';
 }
 
+/**
+ * Seconds until a scheduled retry, or null if none is pending.
+ *
+ * Rounded up so a due retry never reads as "in 0s", and clamped so a clock
+ * that jumped backwards cannot produce a countdown that never ends.
+ */
+export function secondsUntilRetry(
+  nextRetryAt: string | null | undefined,
+  now: number = Date.now(),
+): number | null {
+  if (!nextRetryAt) return null;
+  const due = Date.parse(nextRetryAt);
+  if (Number.isNaN(due)) return null;
+  const seconds = Math.ceil((due - now) / 1000);
+  return seconds > 0 ? Math.min(seconds, 3600) : null;
+}
+
 export function attemptBadge(
   state: SyncState,
   media: { confirmed: number; total: number },
   online: boolean,
+  retryInSeconds: number | null = null,
 ): Badge {
   switch (state) {
     case SyncState.Draft:
       return { label: 'Draft', tone: 'neutral' };
     case SyncState.Queued:
+      if (retryInSeconds !== null) {
+        return { label: `Retrying in ${retryInSeconds}s`, tone: 'progress' };
+      }
       return online
         ? { label: 'Waiting to send', tone: 'progress' }
         : { label: 'On device', tone: 'neutral' };
@@ -27,6 +48,14 @@ export function attemptBadge(
       return { label: 'Sending', tone: 'progress' };
     case SyncState.AttemptAcked:
     case SyncState.UploadingMedia:
+      // Three states, told apart honestly. "Uploading" while work is actually
+      // in flight, a countdown when the only thing happening is a wait, and
+      // "needs attention" when nothing further will happen on its own. An
+      // attempt parked behind a backoff used to read as uploading, which is
+      // how one that had stopped making progress still looked busy.
+      if (retryInSeconds !== null) {
+        return { label: `Retrying in ${retryInSeconds}s`, tone: 'progress' };
+      }
       return media.total > 0
         ? { label: `Evidence uploading ${media.confirmed}/${media.total}`, tone: 'progress' }
         : { label: 'Finishing', tone: 'progress' };
