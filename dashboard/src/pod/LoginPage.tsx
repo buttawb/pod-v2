@@ -26,7 +26,10 @@ export function LoginPage({ onSignedIn }: { onSignedIn: (session: OfficeSession)
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-muted/40 p-6">
+    // `grow w-full`: Metronic makes <body> a flex row and this page is one of
+    // its items, so without it the page shrinks to the width of the card and
+    // `justify-center` centres inside that rather than the screen.
+    <div className="flex min-h-screen w-full grow items-center justify-center bg-muted/40 p-6">
       <Card className="w-full max-w-sm">
         <CardHeader>
           <CardTitle>Proof of Delivery - Office</CardTitle>
