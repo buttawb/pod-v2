@@ -20,6 +20,7 @@ import {
   View,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Card, SectionLabel, SyncBadge, colors, radius, spacing, type } from './components';
 import { OUTCOME_SPECS, type Outcome } from '../domain/outcomes';
 import { attemptBadge, secondsUntilRetry } from '../sync/badges';
@@ -86,6 +87,7 @@ function AttemptDetailsModal({
   const [photos, setPhotos] = useState<PhotoRow[]>([]);
   const [address, setAddress] = useState<string | null>(null);
   const [viewing, setViewing] = useState<PhotoRow | null>(null);
+  const insets = useSafeAreaInsets();
 
   const load = useCallback(async () => {
     if (!clientAttemptId) return;
@@ -110,20 +112,30 @@ function AttemptDetailsModal({
   return (
     <Modal visible animationType="slide" onRequestClose={onClose} statusBarTranslucent>
       <View style={styles.sheet}>
-        <View style={styles.header}>
-          <Text style={type.heading} numberOfLines={1}>
-            {outcome ? OUTCOME_SPECS[outcome].label : 'Attempt'}
-          </Text>
+        {/* The modal draws under the status bar, so the top padding has to be
+            the real inset. A fixed value put the title against the clock on a
+            handset whose status bar is taller than the guess. */}
+        <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
+          <View style={styles.headerText}>
+            <Text style={styles.headerTitle} numberOfLines={1}>
+              {outcome ? OUTCOME_SPECS[outcome].label : 'Attempt'}
+            </Text>
+            {/* The address lives here rather than as another row in the card
+                below: one statement of where this happened, not two. */}
+            {address ? (
+              <Text style={type.meta} numberOfLines={1}>
+                {address}  ·  Attempt {attempt?.attempt_no ?? ''}
+              </Text>
+            ) : null}
+          </View>
           <Pressable onPress={onClose} accessibilityLabel="Close" hitSlop={12}>
-            <Feather name="x" size={22} color={colors.text} />
+            <Feather name="x" size={22} color={colors.textMuted} />
           </Pressable>
         </View>
 
         {attempt ? (
           <ScrollView contentContainerStyle={styles.body}>
             <Card style={styles.card}>
-              <Row label="Stop" value={address ?? attempt.stop_id} />
-              <Row label="Attempt" value={`#${attempt.attempt_no}`} />
               {/* Two clocks, always both. The gap between them is the offline
                   window, and collapsing them would hide it. */}
               <Row label="Captured" value={formatStamp(attempt.captured_at)} />
@@ -381,13 +393,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.md,
-    paddingTop: spacing.xl,
     paddingHorizontal: spacing.md,
-    paddingBottom: spacing.sm,
+    paddingBottom: spacing.md,
     backgroundColor: colors.card,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
+  headerText: { flex: 1, gap: 2 },
+  // A sheet title, not a page title: 20pt competed with the content it was
+  // introducing on a screen this dense.
+  headerTitle: { fontSize: 17, fontWeight: '700', color: colors.text, letterSpacing: -0.2 },
   body: { padding: spacing.md, gap: spacing.sm, paddingBottom: spacing.xl },
   card: { gap: spacing.sm },
   badgeLine: { flexDirection: 'row', marginTop: spacing.sm },
