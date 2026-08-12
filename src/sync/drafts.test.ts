@@ -154,3 +154,42 @@ describe('the SQL predicate cannot drift from the field list', () => {
     expect(SUBSTANTIVE_DRAFT_SQL).toContain('attempt_photos');
   });
 });
+
+/**
+ * Force-quit during the location wait.
+ *
+ * This is the window the bounded fix exists to shrink, and it can never be
+ * closed entirely: however short the budget, a driver can always kill the app
+ * inside it. What must hold is that nothing is lost when they do. The attempt
+ * has not been finalized yet, so it is still a draft, and the photos and
+ * signature were written to disk at capture time rather than at submit.
+ */
+describe('force-quit while waiting for a fix', () => {
+  it('leaves a resumable draft with the evidence intact', () => {
+    // Exactly the row as it stands mid-submit: outcome chosen, photo and
+    // signature already on disk, lat and lng not yet written because the race
+    // had not resolved.
+    const row = draft({
+      outcome: 'delivered_to_person',
+      signature_path: 'file:///evidence/attempt-1-signature.png',
+      lat: null,
+      lng: null,
+      gps_accuracy_m: null,
+    });
+    const photos = [photo(0), photo(100, { kind: 'signature' })];
+
+    expect(planDraftSweep([{ row, photos }])).toEqual({ resume: ['attempt-1'], discard: [] });
+
+    const snapshot = hydrateDraft(row, photos);
+    expect(snapshot.outcome).toBe('delivered_to_person');
+    expect(snapshot.signaturePath).toBe('file:///evidence/attempt-1-signature.png');
+    expect(snapshot.photos).toHaveLength(2);
+  });
+
+  it('does not treat a missing position as a reason to discard the draft', () => {
+    // lat and lng are not evidence fields: they are written at submit, so
+    // counting them would make a draft the driver had genuinely worked on look
+    // blank whenever the fix lost its race.
+    expect(isSubstantiveDraft(draft({ lat: null, lng: null }), [photo(0)])).toBe(true);
+  });
+});

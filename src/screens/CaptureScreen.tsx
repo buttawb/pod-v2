@@ -43,6 +43,7 @@ import {
 } from '../db/attempts-repo';
 import { hydrateDraft } from '../sync/drafts';
 import { capturePhoto, deleteFile, freeSpaceBytes, getCurrentFix, saveSignature } from '../capture/media';
+import { FIX_BUDGET_MS, fixWithinBudget } from '../capture/bounded-fix';
 import { syncEngine } from '../sync/sync-engine';
 import { SignaturePad } from '../capture/SignaturePad';
 import { BarcodeScanner } from '../capture/BarcodeScanner';
@@ -86,6 +87,7 @@ export function CaptureScreen({ stopId, onDone }: { stopId: string; onDone: () =
   const [expectedBarcode, setExpectedBarcode] = useState<string | null>(null);
   const [overrideReason, setOverrideReason] = useState<string | null>(null);
   const [retryToday, setRetryToday] = useState(false);
+  const [locating, setLocating] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -310,7 +312,12 @@ export function CaptureScreen({ stopId, onDone }: { stopId: string; onDone: () =
     if (!draftId || !outcome || violations.length > 0) return;
     setBusy(true);
     try {
-      const fix = await getCurrentFix();
+      // Bounded: a fix if one arrives within the budget, null if not. The
+      // attempt reaching disk is what matters, and it must not wait on a
+      // radio that may never answer indoors.
+      setLocating(true);
+      const fix = await fixWithinBudget(getCurrentFix, FIX_BUDGET_MS);
+      setLocating(false);
       await updateDraft(draftId, {
         outcome,
         reason_code: reasonCode,
@@ -589,7 +596,7 @@ export function CaptureScreen({ stopId, onDone }: { stopId: string; onDone: () =
           </View>
         ) : null}
         <Button
-          label="Complete attempt"
+          label={locating ? 'Getting location…' : 'Complete attempt'}
           icon="check"
           onPress={() => void submit()}
           disabled={violations.length > 0}
