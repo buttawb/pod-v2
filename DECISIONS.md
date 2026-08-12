@@ -96,6 +96,44 @@ at the current token. And reuse of a rotated refresh token is treated as theft
 and contains the whole family automatically. If the fleet later carries higher
 risk, the lever is a shorter access token, not a different design.
 
+## Keyset pagination, and no OFFSET anywhere
+
+Every list is paged by an opaque `(timestamp, id)` cursor compared as a row
+value, `(received_at, id) < ($1, $2)`, ordered to match, with an index in the
+same shape. There is no `OFFSET` in the codebase.
+
+Two reasons, and the second is the one that matters here.
+
+**Cost.** `OFFSET 200000` makes Postgres walk and discard 200,000 rows to
+return fifty. Against 14M attempts the last page of a filtered search costs
+hundreds of times the first. A keyset seeks straight to its position, so page
+ten thousand costs what page one costs, and the endpoint cannot be turned into
+an accidental denial of service by someone paging deep.
+
+**Correctness.** Offsets are positions in a result set that is still moving.
+Attempts arrive constantly from 3,000 handsets, and this list is ordered
+newest first, so rows are inserted at the front of exactly the window being
+read. Every insert between two requests shifts everything down one: the reader
+sees a row twice, or never sees it at all. On an evidence record that is not a
+cosmetic glitch, it is a page of a delivery history that silently omits a
+delivery. A keyset is anchored to a row, not a position, so concurrent inserts
+cannot move it.
+
+Two details that make it actually hold. The cursor carries Postgres's own text
+timestamp rather than a JavaScript `Date`, because a `Date` round-trip
+truncates microseconds to milliseconds and rows sharing a millisecond then get
+skipped or repeated at the page boundary. And each page reads one row beyond
+its limit to answer "is there more" exactly, instead of inferring it from a
+full page, which claims another page whenever the total is a multiple of the
+page size.
+
+The delta-sync endpoint carries a **separate cursor per table** for the same
+reason: one shared cursor advanced past the slower table's unread rows, which
+loses stops or attempts permanently rather than merely showing them oddly. It
+also refuses to read rows newer than three seconds, because `now()` is not a
+safe boundary when a late-committing transaction can insert a row whose
+timestamp is already in the reader's past.
+
 ## Live status, without sockets
 
 The driver app holds **no live connection at all**. It POSTs attempts over

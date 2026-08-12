@@ -108,19 +108,25 @@ export class OfficeService {
        WHERE ($1::timestamptz IS NULL OR (a.received_at, a.id) < ($1::timestamptz, $2::uuid))
          AND ($3::text IS NULL OR a.outcome = $3)
        ORDER BY a.received_at DESC, a.id DESC
-       LIMIT ${LIST_PAGE_SIZE}`,
+       LIMIT ${LIST_PAGE_SIZE + 1}`,
       [cursor?.ts ?? null, cursor?.id ?? null, status ?? null],
     )) as Array<{ id: string; cursor_ts: string }>;
+
+    // Reading one row past the page answers "is there more" exactly. Inferring
+    // it from a full page claims another page exists whenever the total is a
+    // multiple of the page size, and the caller then pages into nothing.
+    const hasMore = rows.length > LIST_PAGE_SIZE;
+    const page = hasMore ? rows.slice(0, LIST_PAGE_SIZE) : rows;
 
     // The cursor carries Postgres's own text timestamp. A JavaScript Date
     // round-trip truncates to milliseconds, and rows inside the same
     // millisecond would then be skipped or repeated between pages - which
     // is disqualifying when the office is paging through evidence.
-    const last = rows[rows.length - 1];
+    const last = page[page.length - 1];
     return {
-      attempts: rows.map(({ cursor_ts: _drop, ...rest }) => rest),
+      attempts: page.map(({ cursor_ts: _drop, ...rest }) => rest),
       nextCursor: last ? encodeCursor({ ts: last.cursor_ts, id: last.id }) : null,
-      hasMore: rows.length === LIST_PAGE_SIZE,
+      hasMore,
     };
   }
 

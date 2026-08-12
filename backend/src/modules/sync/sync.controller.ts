@@ -53,7 +53,7 @@ export class SyncController {
     if (cursor && !since) throw new BadRequestException('Malformed cursor');
     const from = since as SyncCursor;
 
-    const stops = (await this.dataSource.query(
+    const stopRows = (await this.dataSource.query(
       `SELECT id, address, postcode, sequence, status, lat, lng, updated_at,
               updated_at::text AS cursor_ts
        FROM stops
@@ -61,11 +61,11 @@ export class SyncController {
          AND (updated_at, id) > ($2::timestamptz, $3::uuid)
          AND updated_at < now() - interval '3 seconds'
        ORDER BY updated_at ASC, id ASC
-       LIMIT ${PAGE_SIZE}`,
+       LIMIT ${PAGE_SIZE + 1}`,
       [user.sub, from.stops.ts, from.stops.id],
     )) as Array<{ id: string; cursor_ts: string }>;
 
-    const attempts = (await this.dataSource.query(
+    const attemptRows = (await this.dataSource.query(
       `SELECT id, client_attempt_id, stop_id, outcome, evidence_status, captured_at,
               received_at, updated_at, updated_at::text AS cursor_ts
        FROM delivery_attempts
@@ -73,9 +73,17 @@ export class SyncController {
          AND (updated_at, id) > ($2::timestamptz, $3::uuid)
          AND updated_at < now() - interval '3 seconds'
        ORDER BY updated_at ASC, id ASC
-       LIMIT ${PAGE_SIZE}`,
+       LIMIT ${PAGE_SIZE + 1}`,
       [user.sub, from.attempts.ts, from.attempts.id],
     )) as Array<{ id: string; cursor_ts: string }>;
+
+    // One row past each page answers "is there more" exactly. Inferring it from
+    // a full page tells the handset to come back for a page that is empty, and
+    // this endpoint is the one the sync engine loops on.
+    const moreStops = stopRows.length > PAGE_SIZE;
+    const moreAttempts = attemptRows.length > PAGE_SIZE;
+    const stops = moreStops ? stopRows.slice(0, PAGE_SIZE) : stopRows;
+    const attempts = moreAttempts ? attemptRows.slice(0, PAGE_SIZE) : attemptRows;
 
     const next: SyncCursor = {
       stops: advance(from.stops, stops),
@@ -86,7 +94,7 @@ export class SyncController {
       stops: stops.map(stripCursor),
       attempts: attempts.map(stripCursor),
       nextCursor: encodeSyncCursor(next),
-      hasMore: stops.length === PAGE_SIZE || attempts.length === PAGE_SIZE,
+      hasMore: moreStops || moreAttempts,
       serverTime: new Date().toISOString(),
     };
   }
