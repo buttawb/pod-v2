@@ -35,6 +35,16 @@ export function SignaturePad({
           // Saving an untouched pad must not silently produce blank evidence.
           onEmpty={onCancel}
           descriptionText=""
+          // Flattens the exported PNG onto a solid background.
+          //
+          // The webStyle below only colours the canvas element in the page;
+          // CSS background is never drawn into the exported bitmap, so every
+          // signature captured before this was dark ink on transparency. It
+          // looked correct against the app's light cards and disappeared on
+          // any dark surface, which is how a signature came to open as a
+          // blank screen in the evidence viewer. Evidence should not depend
+          // on what is painted behind it.
+          backgroundColor={colors.background}
           webStyle={WEB_STYLE}
         />
       </View>

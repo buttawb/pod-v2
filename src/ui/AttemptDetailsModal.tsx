@@ -291,6 +291,21 @@ function resolveUri(photo: PhotoRow): string {
  * resets, which is the whole of what someone checking a delivery photo needs.
  */
 function FullScreenViewer({ photo, onClose }: { photo: PhotoRow; onClose: () => void }) {
+  /**
+   * A signature needs a light backdrop; a photograph does not.
+   *
+   * The signature pad styles its canvas background in CSS, and CSS background
+   * is not drawn into the exported bitmap, so the PNG we store is dark ink on
+   * transparency. It reads fine on the white card in the grid and vanished
+   * completely here, where the viewer painted black behind it: tapping a
+   * signature opened what looked like a blank screen.
+   *
+   * Photographs stay on black, which is what makes a delivery photo easiest
+   * to inspect. The backdrop follows the content rather than the screen.
+   */
+  const isSignature = photo.kind === 'signature';
+  const backdrop = isSignature ? '#ffffff' : '#000000';
+  const controlColor = isSignature ? colors.text : '#ffffff';
   const scale = useRef(new Animated.Value(1)).current;
   const translate = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
   const gesture = useRef({ startDistance: 0, startScale: 1, current: 1, x: 0, y: 0 });
@@ -345,7 +360,7 @@ function FullScreenViewer({ photo, onClose }: { photo: PhotoRow; onClose: () => 
 
   return (
     <Modal visible transparent={false} onRequestClose={onClose} statusBarTranslucent>
-      <View style={styles.viewer} {...responder.panHandlers}>
+      <View style={[styles.viewer, { backgroundColor: backdrop }]} {...responder.panHandlers}>
         <Animated.Image
           source={{ uri: resolveUri(photo) }}
           resizeMode="contain"
@@ -355,10 +370,10 @@ function FullScreenViewer({ photo, onClose }: { photo: PhotoRow; onClose: () => 
           ]}
         />
         <Pressable style={styles.viewerClose} onPress={onClose} hitSlop={12}>
-          <Feather name="x" size={24} color="#fff" />
+          <Feather name="x" size={24} color={controlColor} />
         </Pressable>
         <Pressable style={styles.viewerReset} onPress={reset} hitSlop={12}>
-          <Text style={styles.viewerResetText}>Reset zoom</Text>
+          <Text style={[styles.viewerResetText, { color: controlColor }]}>Reset zoom</Text>
         </Pressable>
       </View>
     </Modal>
@@ -435,9 +450,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  viewer: { flex: 1, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' },
+  viewer: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   viewerImage: { width: '100%', height: '100%' },
   viewerClose: { position: 'absolute', top: 48, right: 20 },
   viewerReset: { position: 'absolute', bottom: 40, alignSelf: 'center' },
-  viewerResetText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+  viewerResetText: { fontSize: 14, fontWeight: '600' },
 });
