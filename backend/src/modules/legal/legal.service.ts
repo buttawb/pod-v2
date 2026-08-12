@@ -11,7 +11,7 @@ export const SubjectType = {
 export type SubjectType = (typeof SubjectType)[keyof typeof SubjectType];
 
 /**
- * Which columns an erasure clears, per subject.
+ * Which columns an erasure clears, per subject, and what replaces each value.
  *
  * A list rather than a loop over the entity, because the point of this file is
  * that the boundary is explicit. A column added to `drivers` tomorrow should
@@ -22,10 +22,37 @@ export type SubjectType = (typeof SubjectType)[keyof typeof SubjectType];
  * attempt to the person who made it, so clearing it would break the
  * attribution of evidence we are required to keep. `password_hash` is not
  * either; the token revocation below is what ends access.
+ *
+ * NULL is the honest erasure and is used wherever the column permits it.
+ * `display_name` is NOT NULL on both tables and `office_users.email` is both
+ * NOT NULL and UNIQUE, so those get a placeholder instead. The placeholder is
+ * chosen to carry no information about the person: a fixed marker where it can
+ * be, and where uniqueness is required, the row's own primary key, which the
+ * table already holds. `.invalid` is reserved by RFC 2606 and can never route,
+ * so an erased address cannot be mistaken for a live one or mailed by accident.
+ *
+ * Relaxing the NOT NULL constraints instead was the alternative. Not worth it:
+ * every read path would have to start handling a null display name to make one
+ * write simpler, and a name that reads "[erased]" states plainly what happened
+ * where a null would just look like missing data.
  */
-const REDACTABLE: Record<SubjectType, { table: string; columns: string[] }> = {
-  [SubjectType.Driver]: { table: 'drivers', columns: ['email', 'display_name'] },
-  [SubjectType.OfficeUser]: { table: 'office_users', columns: ['email', 'display_name'] },
+type Redaction = { column: string; value: (subjectId: string) => string | null };
+
+const REDACTABLE: Record<SubjectType, { table: string; columns: Redaction[] }> = {
+  [SubjectType.Driver]: {
+    table: 'drivers',
+    columns: [
+      { column: 'email', value: () => null },
+      { column: 'display_name', value: () => '[erased]' },
+    ],
+  },
+  [SubjectType.OfficeUser]: {
+    table: 'office_users',
+    columns: [
+      { column: 'email', value: (id) => `erased-${id}@erased.invalid` },
+      { column: 'display_name', value: () => '[erased]' },
+    ],
+  },
 };
 
 export interface ErasureResult {
@@ -87,6 +114,8 @@ export class LegalService {
     if (!spec) throw new BadRequestException('Unknown subject type');
 
     return this.dataSource.transaction(async (em) => {
+      const fieldNames = spec.columns.map((c) => c.column);
+
       const [subject] = (await em.query(
         `SELECT id FROM ${spec.table} WHERE id = $1 FOR UPDATE`,
         [subjectId],
@@ -95,10 +124,10 @@ export class LegalService {
 
       // Redacted in place. The row survives so evidence keeps its foreign key
       // and its attribution; only what identifies the person is removed.
-      const setters = spec.columns.map((c, i) => `${c} = $${i + 2}`).join(', ');
+      const setters = spec.columns.map((c, i) => `${c.column} = $${i + 2}`).join(', ');
       await em.query(`UPDATE ${spec.table} SET ${setters} WHERE id = $1`, [
         subjectId,
-        ...spec.columns.map(() => null),
+        ...spec.columns.map((c) => c.value(subjectId)),
       ]);
 
       const column = subjectType === SubjectType.Driver ? 'driver_id' : 'office_user_id';
@@ -122,7 +151,7 @@ export class LegalService {
       await em.query(
         `INSERT INTO erasure_log (actor_id, subject_type, subject_id, fields_redacted, tokens_revoked)
          VALUES ($1,$2,$3,$4::jsonb,$5)`,
-        [actorId, subjectType, subjectId, JSON.stringify(spec.columns), revoked.length],
+        [actorId, subjectType, subjectId, JSON.stringify(fieldNames), revoked.length],
       );
 
       this.logger.log(
@@ -131,7 +160,7 @@ export class LegalService {
           actorId,
           subjectType,
           subjectId,
-          fieldsRedacted: spec.columns,
+          fieldsRedacted: fieldNames,
           tokensRevoked: revoked.length,
           evidenceRetained: retained,
         }),
@@ -140,7 +169,7 @@ export class LegalService {
       return {
         subjectType,
         subjectId,
-        fieldsRedacted: spec.columns,
+        fieldsRedacted: fieldNames,
         tokensRevoked: revoked.length,
         evidenceRetained: retained,
         erasedAt: new Date().toISOString(),

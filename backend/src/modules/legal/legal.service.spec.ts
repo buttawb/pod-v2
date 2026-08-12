@@ -52,9 +52,10 @@ describe('erasure (contacts go, evidence stays, and it is all recorded)', () => 
     const update = queries.find((q) => q.sql.includes('UPDATE drivers'));
     expect(update?.sql).toContain('email = $2');
     expect(update?.sql).toContain('display_name = $3');
-    // Nulled, not overwritten with a placeholder that is itself a record of
-    // the person having existed under a particular name.
-    expect(update?.params).toEqual([DRIVER, null, null]);
+    // Null wherever the schema allows it. display_name is NOT NULL on both
+    // tables, so it gets a marker that says plainly what happened instead of
+    // looking like data that was never collected.
+    expect(update?.params).toEqual([DRIVER, null, '[erased]']);
   });
 
   it('revokes every refresh token the subject holds', async () => {
@@ -145,5 +146,12 @@ describe('erasure (contacts go, evidence stays, and it is all recorded)', () => 
     expect(queries.find((q) => q.sql.includes('UPDATE refresh_tokens'))?.sql).toContain(
       'office_user_id = $1',
     );
+
+    // office_users.email is NOT NULL and UNIQUE, so it cannot be nulled and
+    // cannot collide with the next erasure. .invalid is reserved by RFC 2606,
+    // so an erased address can never be mistaken for a live one or mailed.
+    const update = queries.find((q) => q.sql.includes('UPDATE office_users'));
+    expect(update?.params[1]).toBe(`erased-${DRIVER}@erased.invalid`);
+    expect(update?.params[2]).toBe('[erased]');
   });
 });
