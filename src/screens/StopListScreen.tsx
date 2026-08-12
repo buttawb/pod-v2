@@ -272,6 +272,12 @@ export function StopListScreen({
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
+        // A horizontal ScrollView is still a flex child of a column, and
+        // without this it grows into whatever space the list below is not
+        // using. With 151 rows there is none, so it looked correct; filter
+        // down to one row and the chips floated in the middle of the screen
+        // with a void above and below them.
+        style={styles.filterBar}
         contentContainerStyle={[styles.filters, edge]}
         keyboardShouldPersistTaps="handled"
       >
@@ -370,6 +376,7 @@ const styles = StyleSheet.create({
   // A stop dispatch pulled before anyone worked it. Receded, not hidden:
   // the driver should still see it was on the round this morning.
   search: { paddingTop: spacing.sm },
+  filterBar: { flexGrow: 0, flexShrink: 0 },
   filters: { gap: spacing.sm, paddingVertical: spacing.sm, alignItems: 'center' },
   rowWithdrawn: { opacity: 0.45 },
   badgeRow: { marginTop: 6 },
