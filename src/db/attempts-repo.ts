@@ -1,5 +1,6 @@
 import * as Crypto from 'expo-crypto';
 import { getDatabase } from './schema';
+import { SUBSTANTIVE_DRAFT_SQL } from '../sync/drafts';
 import {
   canTransition,
   FailureKind,
@@ -102,16 +103,25 @@ export async function getPhotos(clientAttemptId: string): Promise<PhotoRow[]> {
  * Scoped by driver because handsets are shared and `updateDraft` never
  * rewrites `driver_id`: without this, driver B opening the stop would inherit
  * driver A's half-finished capture and submit it under A's name from B's
- * session. Newest first, since that is the one the driver last had open.
+ * session.
+ *
+ * A draft with work in it wins over a newer empty one. Ordering by recency
+ * alone made this disagree with the stop list, which asks "is there a draft
+ * with anything in it" via the same predicate: the list showed an unfinished
+ * badge while the detail screen offered a fresh Record attempt, because an
+ * empty draft left behind by an older build sorted above the real one. Both
+ * paths now read the same rule, which is what SUBSTANTIVE_DRAFT_SQL exists
+ * for.
  */
 export async function getDraftForStop(
   stopId: string,
   driverId: string,
 ): Promise<AttemptRow | null> {
   return getDatabase().getFirstAsync<AttemptRow>(
-    `SELECT * FROM attempts
-     WHERE stop_id = ? AND driver_id = ? AND sync_state = 'draft'
-     ORDER BY captured_at DESC
+    `SELECT a.* FROM attempts a
+     WHERE a.stop_id = ? AND a.driver_id = ? AND a.sync_state = 'draft'
+     ORDER BY CASE WHEN ${SUBSTANTIVE_DRAFT_SQL} THEN 0 ELSE 1 END,
+              a.captured_at DESC
      LIMIT 1`,
     stopId,
     driverId,
