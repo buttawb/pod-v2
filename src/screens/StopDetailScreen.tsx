@@ -19,6 +19,7 @@ import {
   type,
 } from '../ui/components';
 import { attemptBadge, secondsUntilRetry } from '../sync/badges';
+import { useAttemptDetails } from '../ui/AttemptDetailsModal';
 import { getStop, type StopRow } from '../db/stops-repo';
 import { getDatabase } from '../db/schema';
 import { getDraftForStop, getPhotos, retryNow } from '../db/attempts-repo';
@@ -54,6 +55,7 @@ export function StopDetailScreen({
   const [stop, setStop] = useState<StopRow | null>(null);
   const [attempts, setAttempts] = useState<AttemptSummary[]>([]);
   const [hasDraft, setHasDraft] = useState(false);
+  const details = useAttemptDetails();
   const gate = useVersionGate();
 
   const load = useCallback(async () => {
@@ -143,7 +145,11 @@ export function StopDetailScreen({
           </Card>
         ) : (
           attempts.map((attempt) => (
-            <Card key={attempt.client_attempt_id} style={styles.attemptCard}>
+            <Card
+              key={attempt.client_attempt_id}
+              style={styles.attemptCard}
+              onPress={() => details.open(attempt.client_attempt_id)}
+            >
               <View style={styles.attemptRow}>
                 <View style={styles.attemptDetails}>
                   <Text style={type.bodyStrong}>

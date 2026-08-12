@@ -7,6 +7,7 @@ import { runRecoverySweep } from './src/sync/recovery';
 import { syncEngine } from './src/sync/sync-engine';
 import { getSession, getSessionState, SessionState } from './src/auth/session';
 import { refreshTodayStops } from './src/db/stops-repo';
+import { AttemptDetailsProvider } from './src/ui/AttemptDetailsModal';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { StopListScreen } from './src/screens/StopListScreen';
 import { StopDetailScreen } from './src/screens/StopDetailScreen';
@@ -134,6 +135,9 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
+      {/* One modal host above the routes, so any screen can open an attempt
+          without threading state through the router. */}
+      <AttemptDetailsProvider>
       <View style={styles.root}>
         <StatusBar style="dark" />
         {!signedIn ? (
@@ -166,6 +170,7 @@ export default function App() {
           />
         )}
       </View>
+      </AttemptDetailsProvider>
     </SafeAreaProvider>
   );
 }
