@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -17,7 +17,7 @@ import {
   spacing,
   type,
 } from '../ui/components';
-import { attemptBadge, syncBanner, worstState, type BannerState } from '../sync/badges';
+import { attemptBadge, secondsUntilRetry, syncBanner, type BannerState } from '../sync/badges';
 import { syncCounts } from '../db/attempts-repo';
 import { getTodayStops, refreshTodayStops, type StopWithSync } from '../db/stops-repo';
 import { getSessionState, SessionState } from '../auth/session';
@@ -25,6 +25,102 @@ import { syncEngine } from '../sync/sync-engine';
 import { SyncState } from '../sync/state-machine';
 
 const DONE_STATUSES = new Set(['delivered', 'failed']);
+
+/**
+ * One stop, memoized.
+ *
+ * The list re-reads SQLite on every sync notification: a heartbeat tick, a
+ * NetInfo edge, an announce() after a route pull. Without memoization each of
+ * those re-rendered every mounted row on a 150-stop day, for a change that
+ * usually touches one of them. The comparator is explicit rather than a
+ * shallow prop check because the row object is a fresh object from SQLite
+ * every time, so a default memo would never hit.
+ */
+interface StopRowProps {
+  item: StopWithSync;
+  online: boolean;
+  onPress: (stopId: string) => void;
+}
+
+const StopListRow = memo(
+  function StopListRow({ item, online, onPress }: StopRowProps) {
+    const state = (item.worst_sync_state as SyncState | null) ?? null;
+    const complete = DONE_STATUSES.has(item.status);
+    const hasLocalWork = item.attempt_count > 0 || item.has_unfinished_draft === 1;
+    // Dispatch pulled the stop after the driver had already worked it. Never
+    // greyed and never hidden: that evidence is real and still uploading, and
+    // the driver needs to see that the paperwork moved under them.
+    const changedAfterAction = item.removed === 1 && hasLocalWork;
+    // Pulled before anyone touched it. Nothing was lost, so it recedes.
+    const withdrawn = item.removed === 1 && !hasLocalWork;
+
+    return (
+      <Card onPress={() => onPress(item.stop_id)}>
+        <View style={[styles.row, withdrawn && styles.rowWithdrawn]}>
+          <View style={[styles.seq, complete && styles.seqDone]}>
+            {complete ? (
+              <Feather name="check" size={16} color={colors.good} />
+            ) : (
+              <Text style={styles.seqText}>{item.seq}</Text>
+            )}
+          </View>
+
+          <View style={styles.details}>
+            <Text style={[type.bodyStrong, complete && styles.addressDone]} numberOfLines={1}>
+              {item.address}
+            </Text>
+            <Text style={type.meta}>
+              {item.postcode}
+              {withdrawn ? '  ·  removed by office' : ''}
+            </Text>
+
+            {changedAfterAction ? (
+              <View style={styles.badgeRow}>
+                <SyncBadge badge={{ label: 'Changed after action', tone: 'alert' }} />
+              </View>
+            ) : null}
+
+            {state ? (
+              <View style={styles.badgeRow}>
+                <SyncBadge
+                  badge={attemptBadge(
+                    state,
+                    { confirmed: item.photos_confirmed, total: item.photos_total },
+                    online,
+                    secondsUntilRetry(item.next_retry_at),
+                  )}
+                />
+              </View>
+            ) : null}
+
+            {item.has_unfinished_draft === 1 ? (
+              <View style={styles.badgeRow}>
+                <SyncBadge badge={{ label: 'Unfinished attempt', tone: 'progress' }} />
+              </View>
+            ) : null}
+          </View>
+
+          <Feather name="chevron-right" size={20} color={colors.textSubtle} />
+        </View>
+      </Card>
+    );
+  },
+  (a, b) =>
+    a.online === b.online &&
+    a.onPress === b.onPress &&
+    a.item.stop_id === b.item.stop_id &&
+    a.item.seq === b.item.seq &&
+    a.item.address === b.item.address &&
+    a.item.postcode === b.item.postcode &&
+    a.item.status === b.item.status &&
+    a.item.removed === b.item.removed &&
+    a.item.attempt_count === b.item.attempt_count &&
+    a.item.worst_sync_state === b.item.worst_sync_state &&
+    a.item.has_unfinished_draft === b.item.has_unfinished_draft &&
+    a.item.photos_confirmed === b.item.photos_confirmed &&
+    a.item.photos_total === b.item.photos_total &&
+    a.item.next_retry_at === b.item.next_retry_at,
+);
 
 export function StopListScreen({
   onOpenStop,
@@ -42,6 +138,17 @@ export function StopListScreen({
     visible: false,
   });
   const [refreshing, setRefreshing] = useState(false);
+  const online = syncEngine.isOnline();
+
+  // Stable identity, so a re-render of the screen does not invalidate every
+  // memoized row through a fresh renderItem closure.
+  const renderStop = useCallback(
+    ({ item }: { item: StopWithSync }) => (
+      <StopListRow item={item} online={online} onPress={onOpenStop} />
+    ),
+    [online, onOpenStop],
+  );
+  const keyExtractor = useCallback((item: StopWithSync) => item.stop_id, []);
 
   // Everything renders from SQLite; the network only ever updates the cache.
   const load = useCallback(async () => {
@@ -95,7 +202,7 @@ export function StopListScreen({
 
       <FlatList
         data={stops}
-        keyExtractor={(item) => item.stop_id}
+        keyExtractor={keyExtractor}
         contentContainerStyle={[styles.list, edge, { paddingBottom: insets.bottom + spacing.xl }]}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void onRefresh()} />}
         ListHeaderComponent={
@@ -118,54 +225,7 @@ export function StopListScreen({
             body="Pull down to fetch today's route. Once loaded it stays on this phone, signal or not."
           />
         }
-        renderItem={({ item }) => {
-          const state = (item.worst_sync_state as SyncState | null) ?? null;
-          const complete = DONE_STATUSES.has(item.status);
-          return (
-            <Card onPress={() => onOpenStop(item.stop_id)}>
-              <View style={styles.row}>
-                <View style={[styles.seq, complete && styles.seqDone]}>
-                  {complete ? (
-                    <Feather name="check" size={16} color={colors.good} />
-                  ) : (
-                    <Text style={styles.seqText}>{item.seq}</Text>
-                  )}
-                </View>
-
-                <View style={styles.details}>
-                  <Text
-                    style={[type.bodyStrong, complete && styles.addressDone]}
-                    numberOfLines={1}
-                  >
-                    {item.address}
-                  </Text>
-                  <Text style={type.meta}>
-                    {item.postcode}
-                    {item.removed === 1 ? '  ·  removed by dispatch' : ''}
-                  </Text>
-                  {state ? (
-                    <View style={styles.badgeRow}>
-                      <SyncBadge
-                        badge={attemptBadge(
-                          worstState([state]) ?? state,
-                          { confirmed: 0, total: 0 },
-                          syncEngine.isOnline(),
-                        )}
-                      />
-                    </View>
-                  ) : null}
-                  {item.has_unfinished_draft === 1 ? (
-                    <View style={styles.badgeRow}>
-                      <SyncBadge badge={{ label: 'Unfinished attempt', tone: 'progress' }} />
-                    </View>
-                  ) : null}
-                </View>
-
-                <Feather name="chevron-right" size={20} color={colors.textSubtle} />
-              </View>
-            </Card>
-          );
-        }}
+        renderItem={renderStop}
       />
     </Screen>
   );
@@ -202,5 +262,8 @@ const styles = StyleSheet.create({
   seqText: { fontSize: 15, fontWeight: '700', color: colors.textMuted },
   details: { flex: 1, gap: 2 },
   addressDone: { color: colors.textMuted },
+  // A stop dispatch pulled before anyone worked it. Receded, not hidden:
+  // the driver should still see it was on the round this morning.
+  rowWithdrawn: { opacity: 0.45 },
   badgeRow: { marginTop: 6 },
 });

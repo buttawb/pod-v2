@@ -210,6 +210,12 @@ class SyncEngine {
       outcome: attempt.outcome,
       parcelBarcode: attempt.parcel_barcode ?? undefined,
       barcodeSource: attempt.parcel_barcode ? (attempt.barcode_source ?? 'manual') : undefined,
+      // null means there was nothing to compare against, which the server
+      // records as a different fact from a mismatch, so it is omitted rather
+      // than coerced to false.
+      barcodeMatch: attempt.barcode_match === null ? undefined : attempt.barcode_match === 1,
+      barcodeOverrideReason: attempt.barcode_override_reason ?? undefined,
+      retryToday: attempt.retry_today === 1 ? true : undefined,
       neighbourHouseNumber: attempt.neighbour_house_number ?? undefined,
       reasonCode: attempt.reason_code ?? undefined,
       note: attempt.note ?? undefined,

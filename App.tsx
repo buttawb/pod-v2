@@ -59,6 +59,28 @@ export default function App() {
     return syncEngine.start();
   }, [boot]);
 
+  /**
+   * Token expiry has to be able to reach the screen.
+   *
+   * `signedIn` was computed once at boot and nothing ever set it back to
+   * false, so when a refresh token expired mid-round the driver kept using an
+   * app whose sync had silently stopped. The engine parks the queue on
+   * NeedsReauth, the stop list showed a red banner that was not pressable, and
+   * the only way back was to kill and relaunch.
+   *
+   * The engine notifies on every state change, and the stop list already
+   * re-reads session state on each of those, so this is the same signal
+   * reaching the one place that can act on it. Nothing here touches the queue:
+   * signing back in resumes exactly what was already on disk.
+   */
+  useEffect(() => {
+    return syncEngine.subscribe(() => {
+      void (async () => {
+        if ((await getSessionState()) === SessionState.NeedsReauth) setSignedIn(false);
+      })();
+    });
+  }, []);
+
   useEffect(() => {
     useVersionGate.getState().setRouteActive(signedIn);
   }, [signedIn]);

@@ -41,6 +41,10 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
       lng            REAL,
       status         TEXT NOT NULL DEFAULT 'pending',
       removed        INTEGER NOT NULL DEFAULT 0,
+      -- What dispatch says should be at this door, for the capture-time check.
+      expected_barcode TEXT,
+      -- Server-derived: is this stop still the driver's work today?
+      live_today     INTEGER NOT NULL DEFAULT 1,
       updated_at     TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_stops_route ON stops(route_date, seq);
@@ -56,6 +60,12 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
       note                   TEXT,
       parcel_barcode         TEXT,
       barcode_source         TEXT,
+      -- Did the scan match what dispatch expected? NULL means nothing to
+      -- compare against, which is not the same as a mismatch.
+      barcode_match          INTEGER,
+      barcode_override_reason TEXT,
+      -- Carded and no-access only: the driver is coming back today.
+      retry_today            INTEGER NOT NULL DEFAULT 0,
       signature_path         TEXT,
       lat                    REAL,
       lng                    REAL,
@@ -99,6 +109,59 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
       value TEXT
     );
   `);
+
+  await upgrade(database);
+}
+
+/**
+ * Column additions for databases that already exist on a driver's phone.
+ *
+ * `CREATE TABLE IF NOT EXISTS` above is a no-op once a table is there, so a
+ * column added to it reaches new installs only. Every existing handset would
+ * run new code against an old table and fail on the first read of a column
+ * that is not there. Dropping and recreating is not available to us: that
+ * database holds unsent evidence, and there is no version of this product
+ * where an upgrade deletes a delivery the driver has already made.
+ *
+ * So: PRAGMA user_version as the schema version, and one numbered step per
+ * change. SQLite's ALTER TABLE ADD COLUMN rewrites no rows, so this stays fast
+ * on a full day's data. Steps must be append-only and must never be edited
+ * once shipped, because a phone that has run step 2 will never run it again.
+ */
+const SCHEMA_VERSION = 1;
+
+async function upgrade(database: SQLite.SQLiteDatabase): Promise<void> {
+  const row = await database.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
+  const current = row?.user_version ?? 0;
+  if (current >= SCHEMA_VERSION) return;
+
+  if (current < 1) {
+    // A fresh install already has these from the CREATE above, so each one is
+    // allowed to fail as "duplicate column" and no other way.
+    await addColumn(database, 'attempts', 'retry_today', 'INTEGER NOT NULL DEFAULT 0');
+    await addColumn(database, 'attempts', 'barcode_match', 'INTEGER');
+    await addColumn(database, 'attempts', 'barcode_override_reason', 'TEXT');
+    await addColumn(database, 'stops', 'expected_barcode', 'TEXT');
+    await addColumn(database, 'stops', 'live_today', 'INTEGER NOT NULL DEFAULT 1');
+  }
+
+  await database.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+}
+
+async function addColumn(
+  database: SQLite.SQLiteDatabase,
+  table: string,
+  column: string,
+  definition: string,
+): Promise<void> {
+  try {
+    await database.execAsync(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  } catch (err) {
+    // Only the already-present case is survivable. Anything else means the
+    // schema is not what this build expects, and continuing would corrupt
+    // reads in ways that surface much later.
+    if (!/duplicate column/i.test((err as Error).message)) throw err;
+  }
 }
 
 export async function getMeta(key: string): Promise<string | null> {

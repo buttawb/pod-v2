@@ -19,14 +19,18 @@ import {
   type,
 } from '../ui/components';
 import {
+  BARCODE_OVERRIDE_REASONS,
   OUTCOME_ORDER,
   OUTCOME_SPECS,
   MAX_PHOTOS_PER_ATTEMPT,
   REASON_CODES,
+  RETRY_TODAY_OUTCOMES,
+  barcodeMatches,
   validateEvidence,
   Outcome,
   type Outcome as OutcomeValue,
 } from '../domain/outcomes';
+import { getStop } from '../db/stops-repo';
 import {
   addPhoto,
   createDraft,
@@ -79,11 +83,18 @@ export function CaptureScreen({ stopId, onDone }: { stopId: string; onDone: () =
   const [showScanner, setShowScanner] = useState(false);
   const [busy, setBusy] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  const [expectedBarcode, setExpectedBarcode] = useState<string | null>(null);
+  const [overrideReason, setOverrideReason] = useState<string | null>(null);
+  const [retryToday, setRetryToday] = useState(false);
 
   useEffect(() => {
     void (async () => {
       const session = await getSession();
       if (!session) return;
+
+      // What dispatch says should be at this door, cached with the round so
+      // the check works with no signal.
+      setExpectedBarcode((await getStop(stopId))?.expected_barcode ?? null);
 
       // Resume before creating. A force-quit mid-capture leaves the row and
       // its photo files on disk untouched; minting a fresh draft here is what
@@ -104,6 +115,8 @@ export function CaptureScreen({ stopId, onDone }: { stopId: string; onDone: () =
         setNote(snapshot.note);
         setBarcode(snapshot.parcelBarcode);
         setBarcodeSource(snapshot.barcodeSource);
+        setOverrideReason(existing.barcode_override_reason);
+        setRetryToday(existing.retry_today === 1);
         setSignaturePath(snapshot.signaturePath);
         setPhotos(snapshot.photos);
       } else {
@@ -146,15 +159,28 @@ export function CaptureScreen({ stopId, onDone }: { stopId: string; onDone: () =
     return -1;
   };
 
+  const barcodeMatch = barcodeMatches(expectedBarcode, barcode);
+  const canRetryToday = outcome !== null && RETRY_TODAY_OUTCOMES.includes(outcome);
+
   const violations = useMemo(() => {
     if (!outcome) return ['Choose what happened'];
-    return validateEvidence(outcome, {
+    const evidence = validateEvidence(outcome, {
       hasSignature: signaturePath !== null,
       photoCount,
       reasonCode,
       neighbourHouseNumber: houseNumber.trim() || null,
     });
-  }, [outcome, signaturePath, photoCount, reasonCode, houseNumber]);
+    // A mismatch asks for a reason and never blocks the attempt. Blocking
+    // would not prevent bad data, it would manufacture it: a driver who
+    // cannot record what happened records something else to get past the
+    // block, and a coerced clean scan is worse evidence than a recorded
+    // override. So this is the one violation that gates the button, and only
+    // until the driver picks a reason.
+    if (barcodeMatch === false && !overrideReason) {
+      return [...evidence, 'Say why this barcode does not match'];
+    }
+    return evidence;
+  }, [outcome, signaturePath, photoCount, reasonCode, houseNumber, barcodeMatch, overrideReason]);
 
   const draftFields = useMemo(
     () => ({
@@ -164,8 +190,22 @@ export function CaptureScreen({ stopId, onDone }: { stopId: string; onDone: () =
       note: note.trim() || null,
       parcel_barcode: barcode.trim() || null,
       barcode_source: barcode.trim() ? barcodeSource : null,
+      barcode_match: barcodeMatch === null ? null : barcodeMatch ? 1 : 0,
+      barcode_override_reason: overrideReason,
+      retry_today: canRetryToday && retryToday ? 1 : 0,
     }),
-    [outcome, reasonCode, houseNumber, note, barcode, barcodeSource],
+    [
+      outcome,
+      reasonCode,
+      houseNumber,
+      note,
+      barcode,
+      barcodeSource,
+      barcodeMatch,
+      overrideReason,
+      canRetryToday,
+      retryToday,
+    ],
   );
 
   // Read outside the render cycle by the background flush, which would
@@ -278,6 +318,9 @@ export function CaptureScreen({ stopId, onDone }: { stopId: string; onDone: () =
         note: note.trim() || null,
         parcel_barcode: barcode.trim() || null,
         barcode_source: barcode.trim() ? barcodeSource : null,
+        barcode_match: barcodeMatch === null ? null : barcodeMatch ? 1 : 0,
+        barcode_override_reason: overrideReason,
+        retry_today: canRetryToday && retryToday ? 1 : 0,
         lat: fix?.lat ?? null,
         lng: fix?.lng ?? null,
         gps_accuracy_m: fix?.accuracyM ?? null,
@@ -453,6 +496,10 @@ export function CaptureScreen({ stopId, onDone }: { stopId: string; onDone: () =
                   onChangeText={(value) => {
                     setBarcode(value);
                     setBarcodeSource('manual');
+                    // Correcting the barcode retracts the override with it: a
+                    // reason for a mismatch that no longer exists would be a
+                    // false note on the record.
+                    if (barcodeMatches(expectedBarcode, value) !== false) setOverrideReason(null);
                   }}
                   placeholder="Scan or type"
                   autoCapitalize="characters"
@@ -464,7 +511,61 @@ export function CaptureScreen({ stopId, onDone }: { stopId: string; onDone: () =
                 variant="secondary"
                 onPress={() => setShowScanner(true)}
               />
+
+              {barcodeMatch === true ? (
+                <View style={styles.matchRow}>
+                  <Feather name="check-circle" size={15} color={colors.good} />
+                  <Text style={styles.matchText}>Matches the expected parcel</Text>
+                </View>
+              ) : null}
+
+              {barcodeMatch === false ? (
+                <View style={styles.mismatch}>
+                  <View style={styles.matchRow}>
+                    <Feather name="alert-triangle" size={15} color={colors.alert} />
+                    <Text style={styles.mismatchText}>
+                      This is not the parcel dispatch expected here.
+                    </Text>
+                  </View>
+                  <Text style={type.meta}>
+                    You can still record the delivery. Choose the closest reason so the
+                    difference is on the record.
+                  </Text>
+                  <View style={styles.chips}>
+                    {BARCODE_OVERRIDE_REASONS.map((reason) => (
+                      <Chip
+                        key={reason}
+                        label={reason}
+                        selected={overrideReason === reason}
+                        onPress={() => setOverrideReason(reason)}
+                      />
+                    ))}
+                  </View>
+                </View>
+              ) : null}
             </Card>
+
+            {canRetryToday ? (
+              <Card style={styles.section}>
+                <Text style={type.subheading}>Coming back today?</Text>
+                <Text style={type.meta}>
+                  Keeps this stop on today's list. Leave it off and the stop is done for
+                  the day.
+                </Text>
+                <View style={styles.chips}>
+                  <Chip
+                    label="Yes, retry today"
+                    selected={retryToday}
+                    onPress={() => setRetryToday(true)}
+                  />
+                  <Chip
+                    label="No, done for today"
+                    selected={!retryToday}
+                    onPress={() => setRetryToday(false)}
+                  />
+                </View>
+              </Card>
+            ) : null}
 
             <Card style={styles.section}>
               <Field label="Note (optional)">
@@ -566,6 +667,11 @@ const styles = StyleSheet.create({
     borderRadius: radius.lg,
     backgroundColor: colors.background,
   },
+
+  matchRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  matchText: { flex: 1, color: colors.good, fontSize: 13, fontWeight: '600' },
+  mismatch: { gap: spacing.sm },
+  mismatchText: { flex: 1, color: colors.alert, fontSize: 13, fontWeight: '600' },
 
   violation: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   violationText: { flex: 1, color: colors.progress, fontSize: 14, fontWeight: '600' },

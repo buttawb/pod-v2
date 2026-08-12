@@ -93,6 +93,52 @@ export const REASON_CODES: Record<string, string[]> = {
   [Outcome.AccessFailure]: ['Gate locked', 'No access code', 'Blocked access', 'Dog in garden'],
 };
 
+/**
+ * The only outcomes where "am I coming back today?" is a real question.
+ *
+ * A delivered parcel is settled and a refusal is final, so the flag would be
+ * noise on either. Mirrors RETRY_TODAY_OUTCOMES on the server, which refuses
+ * to store it on anything else.
+ */
+export const RETRY_TODAY_OUTCOMES: Outcome[] = [Outcome.NoAnswerCarded, Outcome.AccessFailure];
+
+/**
+ * Why a driver is proceeding with a barcode that is not the expected one.
+ *
+ * A closed list rather than free text: this is the field that has to stand up
+ * months later in a dispute, and "wrong label" typed six different ways is not
+ * something anyone can count. None of these block the attempt; the driver
+ * chooses one and carries on.
+ */
+export const BARCODE_OVERRIDE_REASONS: string[] = [
+  'Label damaged or unreadable',
+  'Parcel relabelled by depot',
+  'Multiple parcels for this stop',
+  'Scanner misread, checked by hand',
+  'Customer confirmed it is theirs',
+];
+
+/**
+ * Compares a scanned barcode with what dispatch expected.
+ *
+ * Null when there is nothing to compare against: no expected value, or the
+ * driver has not entered one. That is a different fact from a mismatch and the
+ * server stores it as one, so it must not collapse to false here.
+ *
+ * Comparison ignores case and surrounding whitespace. A scanner that returns a
+ * trailing newline, or a driver typing in lower case, is not a mismatch worth
+ * interrupting someone at a doorstep for.
+ */
+export function barcodeMatches(
+  expected: string | null | undefined,
+  scanned: string | null | undefined,
+): boolean | null {
+  const a = expected?.trim().toUpperCase();
+  const b = scanned?.trim().toUpperCase();
+  if (!a || !b) return null;
+  return a === b;
+}
+
 export interface EvidenceInput {
   hasSignature: boolean;
   photoCount: number;

@@ -20,6 +20,9 @@ export interface AttemptRow {
   note: string | null;
   parcel_barcode: string | null;
   barcode_source: string | null;
+  barcode_match: number | null;
+  barcode_override_reason: string | null;
+  retry_today: number;
   signature_path: string | null;
   lat: number | null;
   lng: number | null;
@@ -178,6 +181,9 @@ export async function updateDraft(
       | 'note'
       | 'parcel_barcode'
       | 'barcode_source'
+      | 'barcode_match'
+      | 'barcode_override_reason'
+      | 'retry_today'
       | 'signature_path'
       | 'lat'
       | 'lng'
@@ -407,15 +413,32 @@ export interface SyncCounts {
   synced: number;
 }
 
+/**
+ * The banner's numbers.
+ *
+ * Two things were wrong here. `uploading` counted attempts, so a stop with
+ * four photos still in flight read as "syncing 1 attempt" and the driver had
+ * no idea how much was actually left to send; it now counts the photos, which
+ * is what the time is being spent on. And the whole query was scoped by
+ * neither driver nor day, so on a shared handset the previous driver's
+ * quarantined backlog was counted into this driver's banner, along with
+ * anything left over from earlier days.
+ */
 export async function syncCounts(): Promise<SyncCounts> {
   const row = await getDatabase().getFirstAsync<Record<string, number>>(
-    `SELECT
-       SUM(sync_state = 'queued')                                  AS onDevice,
-       SUM(sync_state = 'submitting')                              AS sending,
-       SUM(sync_state IN ('attempt_acked', 'uploading_media'))     AS uploading,
-       SUM(sync_state = 'needs_attention')                         AS needsAttention,
-       SUM(sync_state = 'synced')                                  AS synced
-     FROM attempts`,
+    `WITH mine AS (
+       SELECT * FROM attempts
+        WHERE driver_id = (SELECT value FROM sync_meta WHERE key = 'driver_id')
+     )
+     SELECT
+       (SELECT count(*) FROM mine WHERE sync_state = 'queued')              AS onDevice,
+       (SELECT count(*) FROM mine WHERE sync_state = 'submitting')          AS sending,
+       (SELECT count(*) FROM attempt_photos p
+          JOIN mine a ON a.client_attempt_id = p.client_attempt_id
+         WHERE a.sync_state IN ('attempt_acked','uploading_media')
+           AND p.upload_state <> 'confirmed')                               AS uploading,
+       (SELECT count(*) FROM mine WHERE sync_state = 'needs_attention')     AS needsAttention,
+       (SELECT count(*) FROM mine WHERE sync_state = 'synced')              AS synced`,
   );
   return {
     onDevice: row?.onDevice ?? 0,

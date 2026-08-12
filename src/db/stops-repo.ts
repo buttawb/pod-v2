@@ -14,6 +14,8 @@ export interface StopRow {
   lng: number | null;
   status: string;
   removed: number;
+  expected_barcode: string | null;
+  live_today: number;
   updated_at: string;
 }
 
@@ -21,6 +23,9 @@ export interface StopWithSync extends StopRow {
   attempt_count: number;
   worst_sync_state: SyncState | null;
   has_unfinished_draft: number;
+  photos_confirmed: number;
+  photos_total: number;
+  next_retry_at: string | null;
 }
 
 interface ServerStop {
@@ -31,6 +36,8 @@ interface ServerStop {
   status: string;
   lat: number | null;
   lng: number | null;
+  expected_barcode: string | null;
+  live_today: boolean;
   updated_at: string;
 }
 
@@ -63,7 +70,23 @@ export async function getTodayStops(): Promise<StopWithSync[]> {
                      WHERE a.stop_id = s.stop_id
                        AND a.sync_state = 'draft'
                        AND a.driver_id = (SELECT value FROM sync_meta WHERE key = 'driver_id')
-                       AND ${SUBSTANTIVE_DRAFT_SQL}) AS has_unfinished_draft
+                       AND ${SUBSTANTIVE_DRAFT_SQL}) AS has_unfinished_draft,
+            -- Real photo counts for the row badge. These used to be hardcoded
+            -- to zero at the call site, which made "Evidence uploading n/m"
+            -- unreachable and rendered every uploading stop as "Finishing".
+            (SELECT count(*) FROM attempt_photos p
+              JOIN attempts a ON a.client_attempt_id = p.client_attempt_id
+             WHERE a.stop_id = s.stop_id AND a.sync_state <> 'draft'
+               AND p.upload_state = 'confirmed') AS photos_confirmed,
+            (SELECT count(*) FROM attempt_photos p
+              JOIN attempts a ON a.client_attempt_id = p.client_attempt_id
+             WHERE a.stop_id = s.stop_id AND a.sync_state <> 'draft') AS photos_total,
+            -- So the row can say "retrying in Xs" rather than implying work
+            -- is in flight while the attempt is parked behind a backoff.
+            (SELECT a.next_retry_at FROM attempts a
+              WHERE a.stop_id = s.stop_id AND a.sync_state <> 'draft'
+                AND a.next_retry_at IS NOT NULL
+              ORDER BY a.next_retry_at ASC LIMIT 1) AS next_retry_at
      FROM stops s
      WHERE s.route_date = ?
      ORDER BY s.removed ASC, s.seq ASC`,
@@ -89,11 +112,13 @@ export async function refreshTodayStops(): Promise<number> {
     for (const stop of response.stops) {
       seen.add(stop.id);
       await db.runAsync(
-        `INSERT INTO stops (stop_id, route_date, seq, address, postcode, lat, lng, status, removed, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+        `INSERT INTO stops (stop_id, route_date, seq, address, postcode, lat, lng, status,
+                            removed, expected_barcode, live_today, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
          ON CONFLICT(stop_id) DO UPDATE SET
            seq = excluded.seq, address = excluded.address, postcode = excluded.postcode,
            lat = excluded.lat, lng = excluded.lng, status = excluded.status,
+           expected_barcode = excluded.expected_barcode, live_today = excluded.live_today,
            removed = 0, updated_at = excluded.updated_at`,
         stop.id,
         routeDate,
@@ -103,6 +128,8 @@ export async function refreshTodayStops(): Promise<number> {
         stop.lat,
         stop.lng,
         stop.status,
+        stop.expected_barcode ?? null,
+        stop.live_today === false ? 0 : 1,
         stop.updated_at,
       );
     }
