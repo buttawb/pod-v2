@@ -96,12 +96,22 @@ resource "aws_s3_bucket_lifecycle_configuration" "evidence" {
       storage_class = "GLACIER_IR"
     }
 
-    # 18-month retention, enforced declaratively so it holds even if the
-    # application-side redaction job never runs. Versions are expired too:
-    # a versioned bucket that only deletes current objects retains the
-    # evidence forever behind a delete marker.
+    # Six years, the confirmed retention for proof of delivery: these records
+    # exist to establish or defend a legal claim, and the claims window is what
+    # sets the number. 2192 days is 6 x 365 plus two leap days.
+    #
+    # This was 550 days, an earlier 18-month assumption that survived the
+    # policy being confirmed. That is a bad failure mode to leave in place:
+    # S3 enforces expiry itself, so evidence would have been destroyed roughly
+    # four and a half years early, silently, on a rolling basis, with nothing
+    # in the API to log or notice it. A retention number that is wrong in the
+    # deleting direction cannot be corrected after the fact.
+    #
+    # Enforced declaratively so it holds even if the application-side redaction
+    # job never runs. Versions are expired too: a versioned bucket that only
+    # deletes current objects keeps the evidence forever behind a delete marker.
     expiration {
-      days = 550
+      days = 2192
     }
 
     noncurrent_version_expiration {
