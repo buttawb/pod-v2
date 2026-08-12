@@ -44,6 +44,14 @@ export class Stop {
   @Column({ type: 'double precision', nullable: true })
   lng!: number | null;
 
+  /**
+   * What dispatch says should be at this door. Additive on the v1 table; the
+   * legacy serializer is a field whitelist, so it cannot reach the frozen v1
+   * response.
+   */
+  @Column({ name: 'expected_barcode', type: 'text', nullable: true })
+  expectedBarcode!: string | null;
+
   @Column({ name: 'updated_at', type: 'timestamptz', default: () => 'now()' })
   updatedAt!: Date;
 }

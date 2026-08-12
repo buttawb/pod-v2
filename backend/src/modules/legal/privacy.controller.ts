@@ -221,11 +221,11 @@ const PRIVACY_POLICY_HTML = `<!doctype html>
 
 <h2>How long it is kept</h2>
 <p>
-  <strong>18 months</strong>, which covers the practical window for courier
-  claims and disputes. Photographs and signatures are deleted automatically by a
-  storage lifecycle rule at the end of that period &mdash; deletion is enforced
-  by the infrastructure itself and does not depend on anyone remembering to run
-  anything.
+  <strong>Six years</strong>, the limitation period for bringing a contractual
+  claim, which is what a proof of delivery exists to answer. Photographs and
+  signatures are deleted automatically by a storage lifecycle rule at the end of
+  that period &mdash; deletion is enforced by the infrastructure itself and does
+  not depend on anyone remembering to run anything.
 </p>
 
 <h2>How it is protected</h2>
@@ -247,10 +247,11 @@ const PRIVACY_POLICY_HTML = `<!doctype html>
 <p>
   One limit is worth stating plainly. Proof of delivery is evidence, and while
   it is still needed to establish or defend a legal claim it is exempt from
-  erasure under Article 17(3)(e). An erasure request made inside the 18-month
+  erasure under Article 17(3)(e). An erasure request made inside the six-year
   retention window will receive that exemption, together with the date on which
-  the evidence will be destroyed automatically. After that date there is nothing
-  left to erase.
+  the evidence will be destroyed automatically. Contact details held about you
+  are erased on request regardless; it is the delivery record itself that is
+  exempt. After that date there is nothing left to erase.
 </p>
 <p>
   If you are unhappy with how we have handled your data you can complain to the

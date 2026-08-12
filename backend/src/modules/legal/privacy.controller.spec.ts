@@ -53,8 +53,17 @@ describe('PrivacyController', () => {
     // the package name on the listing; these are the three things a
     // reviewer looks for and the three most likely to rot.
     expect(text).toContain('com.podv2.driver');
-    expect(text).toContain('18 months');
     expect(text).toContain('buttawb@gmail.com');
+
+    // The stated retention has to be the one the infrastructure enforces.
+    // This assertion previously pinned "18 months", which the S3 lifecycle
+    // rule has not agreed with since it was corrected to 2192 days: the page
+    // was telling the public their evidence would be destroyed four and a half
+    // years before it actually would be, and this test was holding that in
+    // place. A retention period in a privacy policy is a promise, so the
+    // number here and the number in terraform have to move together.
+    expect(text).toContain('Six years');
+    expect(text).not.toContain('18 months');
   });
 
   it('declares every data type the Data safety form declares', async () => {

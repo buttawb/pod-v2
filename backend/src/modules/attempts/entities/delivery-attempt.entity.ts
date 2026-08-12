@@ -71,6 +71,25 @@ export class DeliveryAttempt {
   gpsAccuracyM!: number | null;
 
   /**
+   * The driver intends to come back to this stop today. Only meaningful for
+   * carded and no-access outcomes, where the outcome code alone cannot say
+   * whether the stop is finished for the day.
+   */
+  @Column({ name: 'retry_today', type: 'boolean', default: false })
+  retryToday!: boolean;
+
+  /**
+   * Whether the scanned barcode matched what dispatch expected. Null means
+   * there was nothing to compare against, which is not the same as false.
+   */
+  @Column({ name: 'barcode_match', type: 'boolean', nullable: true })
+  barcodeMatch!: boolean | null;
+
+  /** Why the driver proceeded past a mismatch. Never blocked, always recorded. */
+  @Column({ name: 'barcode_override_reason', type: 'text', nullable: true })
+  barcodeOverrideReason!: string | null;
+
+  /**
    * The stop had moved to another driver by the time this arrived. Set once,
    * at insert, and outside pod_app's UPDATE grant so nothing can clear it.
    */

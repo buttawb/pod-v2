@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { OnEvent } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -156,18 +156,54 @@ export class AiSummaryService {
     return this.serialize(await this.summaries.findOneOrFail({ where: { id: summary.id } }));
   }
 
-  /** A named human clicking Send IS the approval; unedited draft becomes the final text. */
-  async markSent(attemptId: string, officeUserId: string) {
+  /**
+   * A named human signs off on this exact text before it can go anywhere.
+   *
+   * Approval and sending used to be the same click, which meant the record
+   * could not distinguish "a person read this and stood behind it" from "a
+   * person pressed the button that dispatches things". Separating them is what
+   * makes "nothing auto-sends" checkable rather than merely intended: an
+   * unapproved summary has no path to a customer.
+   */
+  async approve(attemptId: string, officeUserId: string) {
     const summary = await this.summaries.findOne({ where: { attemptId } });
-    if (!summary || !summary.draftText) throw new NotFoundException('Nothing to send');
+    if (!summary || !summary.draftText) throw new NotFoundException('Nothing to approve');
+    if (summary.sentAt) return this.serialize(summary); // already gone; settled
+
+    if (
+      summary.status !== AiSummaryStatus.Ready &&
+      summary.status !== AiSummaryStatus.Fallback &&
+      summary.status !== AiSummaryStatus.Approved
+    ) {
+      throw new ConflictException(
+        `Cannot approve a summary that is ${summary.status}: there is no finished text to stand behind`,
+      );
+    }
+
     await this.summaries.update(
       { id: summary.id },
       {
-        // A named human clicking Send is the approval, and the record has to
-        // say so: `ready` only ever meant "the model produced something that
-        // validated", which is not the same claim as "a person stands behind
-        // this text".
         status: AiSummaryStatus.Approved,
+        finalText: summary.finalText ?? summary.draftText,
+        editedBy: summary.editedBy ?? officeUserId,
+      },
+    );
+    return this.serialize(await this.summaries.findOneOrFail({ where: { id: summary.id } }));
+  }
+
+  /** Sending is the act; approval is the authority for it, and must exist first. */
+  async markSent(attemptId: string, officeUserId: string) {
+    const summary = await this.summaries.findOne({ where: { attemptId } });
+    if (!summary || !summary.draftText) throw new NotFoundException('Nothing to send');
+    if (summary.status !== AiSummaryStatus.Approved) {
+      throw new ConflictException('Approve this summary before sending it');
+    }
+    await this.summaries.update(
+      { id: summary.id },
+      {
+        // Status is already Approved by the time we get here, and stays that
+        // way: sentAt is what records that it left, and the two facts are
+        // separate on purpose.
         finalText: summary.finalText ?? summary.draftText,
         editedBy: summary.editedBy ?? officeUserId,
         sentAt: new Date(),

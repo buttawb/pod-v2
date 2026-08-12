@@ -85,6 +85,15 @@ export class OfficeController {
     return this.aiService.getSummary(attemptId);
   }
 
+  /** Sign-off, separate from sending. Nothing reaches a customer unapproved. */
+  @Post('attempts/:id/summary/approve')
+  approveSummary(
+    @Param('id', new ParseUUIDPipe()) attemptId: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.aiService.approve(attemptId, user.sub);
+  }
+
   @Post('attempts/:id/summary/regenerate')
   regenerate(@Param('id', new ParseUUIDPipe()) attemptId: string) {
     return this.aiService.regenerate(attemptId);

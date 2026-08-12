@@ -42,10 +42,28 @@ export class StopsService {
 
   async todayForDriver(driverId: string) {
     const rows = (await this.dataSource.query(
-      `SELECT id, address, postcode, location, sequence, status, lat, lng, updated_at
-       FROM stops
-       WHERE driver_id = $1 AND created_at >= date_trunc('day', now())
-       ORDER BY sequence ASC`,
+      `SELECT s.id, s.address, s.postcode, s.location, s.sequence, s.status,
+              s.lat, s.lng, s.updated_at, s.expected_barcode,
+              -- Whether the stop is still the driver's work today.
+              --
+              -- Derived rather than stored, and deliberately not a new
+              -- stops.status value: status is projected alongside the frozen
+              -- v1 surface and its four values are load-bearing. A carded or
+              -- no-access stop is finished for the day unless the driver said
+              -- on the latest attempt that they are coming back to it.
+              CASE
+                WHEN s.status IN ('delivered','failed') THEN false
+                WHEN s.status = 'pending' THEN true
+                ELSE COALESCE((
+                  SELECT a.retry_today FROM delivery_attempts a
+                   WHERE a.stop_id = s.id
+                   ORDER BY a.received_at DESC, a.id DESC
+                   LIMIT 1
+                ), false)
+              END AS live_today
+       FROM stops s
+       WHERE s.driver_id = $1 AND s.created_at >= date_trunc('day', now())
+       ORDER BY s.sequence ASC`,
       [driverId],
     )) as Array<Record<string, unknown>>;
     return { stops: rows, serverTime: new Date().toISOString() };

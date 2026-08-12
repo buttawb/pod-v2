@@ -84,6 +84,32 @@ interface SeedStop {
   createdAt: string;
   lat: number | null;
   lng: number | null;
+  expectedBarcode: string | null;
+}
+
+/** A plausible courier barcode. Deterministic under the seeded RNG. */
+function makeBarcode(): string {
+  const digits = String(Math.floor(rand() * 1e10)).padStart(10, '0');
+  return `JD${digits}`;
+}
+
+/**
+ * A working day, not a single instant.
+ *
+ * Every one of today's 5,000 stops used to be written with one identical
+ * created_at, taken once before the loop. A demo of a delivery day where the
+ * entire round was created in the same millisecond reads as a bulk import,
+ * which is exactly what it was, and it makes any time-based view (the live
+ * feed, the two-clock model, anything ordered by arrival) look like a single
+ * spike instead of a day's work. Stops are now spread across an 08:00 to
+ * 18:00 window in sequence order, so a driver's round advances through the
+ * day the way a real one does.
+ */
+function dayTimestamp(fraction: number): string {
+  const start = new Date();
+  start.setHours(8, 0, 0, 0);
+  const WORKING_MS = 10 * 3600_000;
+  return new Date(start.getTime() + Math.floor(fraction * WORKING_MS)).toISOString();
 }
 
 function makeStop(driverId: string, sequence: number, createdAt: string, withCoords: boolean): SeedStop {
@@ -103,6 +129,10 @@ function makeStop(driverId: string, sequence: number, createdAt: string, withCoo
     // parsing them into lat/lng is the backfill script's job.
     lat: withCoords ? lat : null,
     lng: withCoords ? lng : null,
+    // What dispatch says should be at this door. Only today's round carries
+    // one: the barcode check is a v2 capture-time feature and back-dating it
+    // onto v1-era stops would imply the old app had ever compared anything.
+    expectedBarcode: withCoords ? makeBarcode() : null,
   };
 }
 
@@ -113,14 +143,14 @@ async function insertStops(stops: SeedStop[]): Promise<void> {
     const values: string[] = [];
     const params: unknown[] = [];
     chunk.forEach((s, j) => {
-      const base = j * 9;
+      const base = j * 10;
       values.push(
-        `($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5},$${base + 6},$${base + 7},$${base + 8},$${base + 9})`,
+        `($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5},$${base + 6},$${base + 7},$${base + 8},$${base + 9},$${base + 10})`,
       );
-      params.push(s.id, s.driverId, s.address, s.postcode, s.location, s.sequence, s.createdAt, s.lat, s.lng);
+      params.push(s.id, s.driverId, s.address, s.postcode, s.location, s.sequence, s.createdAt, s.lat, s.lng, s.expectedBarcode);
     });
     await AppDataSource.query(
-      `INSERT INTO stops (id, driver_id, address, postcode, location, sequence, created_at, lat, lng)
+      `INSERT INTO stops (id, driver_id, address, postcode, location, sequence, created_at, lat, lng, expected_barcode)
        VALUES ${values.join(',')} ON CONFLICT (id) DO NOTHING`,
       params,
     );
@@ -159,11 +189,13 @@ async function main(): Promise<void> {
 
   console.log(`Seeding ${TODAY_STOPS} stops for today (the depot map set)...`);
   const today: SeedStop[] = [];
-  const todayIso = new Date().toISOString();
   driverIds.forEach((driverId, d) => {
     const count = d === driverIds.length - 1 ? TODAY_STOPS - STOPS_PER_DRIVER * (DRIVER_COUNT - 1) : STOPS_PER_DRIVER;
     for (let seq = 1; seq <= count; seq += 1) {
-      today.push(makeStop(driverId, seq, todayIso, true));
+      // Position in the round decides time of day, with a little jitter so
+      // the whole fleet does not move in lockstep.
+      const through = (seq - 1) / Math.max(count - 1, 1);
+      today.push(makeStop(driverId, seq, dayTimestamp(Math.min(through + rand() * 0.02, 1)), true));
     }
   });
   await insertStops(today);

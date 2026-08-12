@@ -85,6 +85,16 @@ export type StopStatus = (typeof StopStatus)[keyof typeof StopStatus];
  * stops.status projection from the latest attempt: delivered outcomes settle
  * the stop; refusal is final; no-answer/no-access mean "will retry".
  */
+/**
+ * The only outcomes where "am I coming back today?" is a real question.
+ *
+ * A delivered parcel is settled and a refusal is final, so a retry flag on
+ * either would be noise the day list would then have to ignore. Carded and
+ * no-access are the two where the outcome code genuinely cannot say whether
+ * the stop is finished for the day.
+ */
+export const RETRY_TODAY_OUTCOMES: Outcome[] = [Outcome.NoAnswerCarded, Outcome.AccessFailure];
+
 export const OUTCOME_TO_STOP_STATUS: Record<Outcome, StopStatus> = {
   [Outcome.DeliveredToPerson]: StopStatus.Delivered,
   [Outcome.LeftWithNeighbour]: StopStatus.Delivered,

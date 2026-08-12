@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsIn,
   IsInt,
   IsISO8601,
@@ -61,6 +62,32 @@ export class CreateAttemptDto {
   @ValidateIf((o: CreateAttemptDto) => o.parcelBarcode !== undefined)
   @IsIn(['scanned', 'manual'])
   barcodeSource?: 'scanned' | 'manual';
+
+  /**
+   * Whether the barcode matched what dispatch expected. Omitted when there was
+   * nothing to compare against, which is a different claim from false.
+   */
+  @IsOptional()
+  @IsBoolean()
+  barcodeMatch?: boolean;
+
+  /**
+   * Required by the app's own UI when the driver proceeds past a mismatch, and
+   * accepted here whenever it is sent. The server does not refuse an attempt
+   * for lacking it: refusing would push the driver into recording a different
+   * outcome to get the evidence saved, which is worse data than an
+   * unexplained override.
+   */
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(120)
+  barcodeOverrideReason?: string;
+
+  /** Carded and no-access only: the driver is coming back to this stop today. */
+  @IsOptional()
+  @IsBoolean()
+  retryToday?: boolean;
 
   @IsOptional()
   @IsString()

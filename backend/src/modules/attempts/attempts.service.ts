@@ -11,7 +11,7 @@ import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'node:crypto';
 import { DataSource, Repository } from 'typeorm';
 import type { JwtPayload } from '../../common/auth/jwt-payload';
-import { validateEvidence } from '../../domain/outcomes';
+import { RETRY_TODAY_OUTCOMES, validateEvidence } from '../../domain/outcomes';
 import { notifyAttemptEvent } from '../events/notify';
 import { S3Service } from '../media/s3.service';
 import { Stop } from '../stops/entities/stop.entity';
@@ -124,8 +124,9 @@ export class AttemptsService {
            neighbour_house_number, reason_code, note,
            lat, lng, gps_accuracy_m, captured_at, clock_suspect, app_version,
            source, declared_photo_count, evidence_status, payload_hash,
-           conflict, conflict_reason
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'v2',$19,$20,$21,$22,$23)
+           conflict, conflict_reason,
+           retry_today, barcode_match, barcode_override_reason
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'v2',$19,$20,$21,$22,$23,$24,$25,$26)
          ON CONFLICT (client_attempt_id) DO NOTHING
          RETURNING id`,
         [
@@ -153,6 +154,11 @@ export class AttemptsService {
           payloadHash,
           conflictReason !== null,
           conflictReason,
+          // Only carded and no-access can carry an intent to return; anything
+          // else is a settled outcome and the flag would be meaningless on it.
+          RETRY_TODAY_OUTCOMES.includes(dto.outcome) ? (dto.retryToday ?? false) : false,
+          dto.barcodeMatch ?? null,
+          dto.barcodeOverrideReason ?? null,
         ],
       )) as Array<{ id: string }>;
 
