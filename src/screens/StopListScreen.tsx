@@ -11,6 +11,9 @@ import {
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { TOUCH_TARGET } from '../ui/theme';
+
+/** Input's minHeight in ui/components. The filter button matches it exactly. */
+const INPUT_HEIGHT = 54;
 import {
   Banner,
   Card,
@@ -315,19 +318,6 @@ export function StopListScreen({
           setMenuTop(y + height);
         }}
       >
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Filter: ${STOP_FILTER_LABELS[filter]}`}
-          onPress={() => setMenuOpen(true)}
-          style={[styles.filterButton, filter !== StopFilter.All && styles.filterButtonActive]}
-        >
-          <Feather
-            name="filter"
-            size={18}
-            color={filter === StopFilter.All ? colors.textMuted : colors.primary}
-          />
-        </Pressable>
-
         <View style={styles.searchField}>
           <Input
             value={query}
@@ -338,6 +328,19 @@ export function StopListScreen({
             clearButtonMode="while-editing"
           />
         </View>
+
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Filter: ${STOP_FILTER_LABELS[filter]}`}
+          onPress={() => setMenuOpen(true)}
+          style={[styles.filterButton, filter !== StopFilter.All && styles.filterButtonActive]}
+        >
+          <Feather
+            name="filter"
+            size={20}
+            color={filter === StopFilter.All ? colors.textMuted : colors.primary}
+          />
+        </Pressable>
       </View>
 
       {/* An active filter has to be legible without opening the menu: a funnel
@@ -357,10 +360,15 @@ export function StopListScreen({
           {/* The backdrop is the dismiss target, so a tap anywhere outside
               closes it rather than trapping the driver in a menu. */}
           <Pressable style={styles.menuBackdrop} onPress={() => setMenuOpen(false)}>
+            {/* onLayout reports y relative to Screen, and Screen is
+                full-bleed from the top of the window, so that y already
+                includes the status bar. Adding insets.top on top of it pushed
+                the menu a status bar's height too far down. Right-aligned
+                because the button it belongs to is now on the right. */}
             <View
               style={[
                 styles.menuPanel,
-                { top: menuTop + insets.top, left: insets.left + spacing.md },
+                { top: menuTop + spacing.xs, right: insets.right + spacing.md },
               ]}
             >
               {STOP_FILTER_ORDER.map((option) => {
@@ -496,8 +504,10 @@ const styles = StyleSheet.create({
   },
   searchField: { flex: 1 },
   filterButton: {
-    width: 44,
-    height: 44,
+    // Square, and exactly the Input's minHeight (54) so the two sit on one
+    // line with no visual step between them.
+    width: INPUT_HEIGHT,
+    height: INPUT_HEIGHT,
     borderRadius: radius.lg,
     alignItems: 'center',
     justifyContent: 'center',
