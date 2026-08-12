@@ -65,6 +65,15 @@ const DONE_STATUSES = new Set(['delivered', 'failed']);
 let rememberedOffset = 0;
 
 /**
+ * How many content growths we will ride before giving up on the old position.
+ *
+ * Generous: a 150 stop round needs a handful. The cap only exists so a
+ * remembered offset that can never be reached, because the round came back
+ * shorter, cannot scroll forever.
+ */
+const MAX_RESTORE_STEPS = 24;
+
+/**
  * Placeholder rows for the only case that warrants them: nothing to show yet.
  *
  * A skeleton stands in for content that is coming. Once the round is on the
@@ -218,12 +227,14 @@ export function StopListScreen({
   const narrow = useCallback((next: StopFilter | null, text: string | null) => {
     // A remembered offset belongs to the list it was measured on.
     rememberedOffset = 0;
+    restoreAttempts.current = 0;
     if (next !== null) setFilter(next);
     if (text !== null) setQuery(text);
   }, []);
   const online = syncEngine.isOnline();
   const listRef = useRef<FlatList<StopWithSync>>(null);
   const restored = useRef(false);
+  const restoreAttempts = useRef(0);
 
   // Counted over the whole day, not the filtered view, so the chips answer
   // "is there anything there" without having to be tapped.
@@ -411,12 +422,36 @@ export function StopListScreen({
           rememberedOffset = event.nativeEvent.contentOffset.y;
         }}
         scrollEventThrottle={64}
-        onContentSizeChange={() => {
-          // Restore once, after the rows exist. Scrolling before layout is a
-          // no-op, which is why this cannot happen on mount.
+        onContentSizeChange={(_width, height) => {
+          // Climb back to where the driver was, one content growth at a time.
+          //
+          // A single scrollToOffset on mount does not work and looked like it
+          // did: FlatList is virtualised, so at that moment only the first
+          // handful of rows exist and the content is a few hundred pixels
+          // tall. Asking for offset 8000 gets clamped to the bottom of what
+          // has rendered, which is the top of the list, so the driver landed
+          // back at stop 1 having opened stop 96.
+          //
+          // Each scroll renders more rows, which grows the content, which
+          // fires this again. So: if the target is now reachable, take it and
+          // stop; otherwise scroll to the end of what exists and let the next
+          // growth carry us further. The attempt counter is the backstop for a
+          // remembered offset that can never be reached, which happens when the
+          // round came back shorter than it was.
           if (restored.current || rememberedOffset <= 0) return;
-          restored.current = true;
-          listRef.current?.scrollToOffset({ offset: rememberedOffset, animated: false });
+
+          if (height > rememberedOffset) {
+            restored.current = true;
+            listRef.current?.scrollToOffset({ offset: rememberedOffset, animated: false });
+            return;
+          }
+
+          restoreAttempts.current += 1;
+          if (restoreAttempts.current > MAX_RESTORE_STEPS) {
+            restored.current = true;
+            return;
+          }
+          listRef.current?.scrollToOffset({ offset: height, animated: false });
         }}
         keyExtractor={keyExtractor}
         contentContainerStyle={[styles.list, edge, { paddingBottom: insets.bottom + spacing.xl }]}
