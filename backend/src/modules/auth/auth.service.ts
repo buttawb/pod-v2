@@ -5,6 +5,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { compare } from 'bcryptjs';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { Repository } from 'typeorm';
+import { Audience } from '../../common/auth/jwt-payload';
 import type { JwtPayload, Role } from '../../common/auth/jwt-payload';
 import { Device } from '../drivers/entities/device.entity';
 import { Driver } from '../drivers/entities/driver.entity';
@@ -149,8 +150,11 @@ export class AuthService {
     const accessTtlSec = this.config.get<number>('JWT_ACCESS_TTL_SEC', 900);
     const refreshTtlDays = this.config.get<number>('REFRESH_TTL_DAYS', 14);
 
+    // Every token minted here says it is for v2. The frozen v1 surface issues
+    // its own with the legacy audience and its own lifetime, so a change to
+    // these numbers cannot reach a handset that cannot be updated.
     const accessToken = await this.jwtService.signAsync(
-      { sub: payload.sub, role: payload.role, deviceId: payload.deviceId },
+      { sub: payload.sub, role: payload.role, deviceId: payload.deviceId, aud: Audience.V2 },
       { expiresIn: accessTtlSec },
     );
 

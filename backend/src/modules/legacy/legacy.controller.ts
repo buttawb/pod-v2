@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Post, VERSION_NEUTRAL } from '@nestjs/common';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
-import { Roles } from '../../common/auth/jwt-auth.guard';
+import { RequireAudience, Roles } from '../../common/auth/jwt-auth.guard';
+import { Audience } from '../../common/auth/jwt-payload';
 import type { JwtPayload } from '../../common/auth/jwt-payload';
 import { LegacyPodDto } from './dto/legacy-pod.dto';
 import { LegacyService } from './legacy.service';
@@ -11,6 +12,7 @@ import { LegacyService } from './legacy.service';
  * change to a byte of these responses fails the test suite.
  */
 @Roles('driver')
+@RequireAudience(Audience.Legacy)
 @Controller({ path: 'stops', version: VERSION_NEUTRAL })
 export class LegacyController {
   constructor(private readonly legacyService: LegacyService) {}

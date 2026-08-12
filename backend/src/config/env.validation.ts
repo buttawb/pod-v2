@@ -18,6 +18,11 @@ export const envValidationSchema = Joi.object({
   JWT_ACCESS_TTL_SEC: Joi.number().integer().default(604800), // 7 days
   REFRESH_TTL_DAYS: Joi.number().integer().default(90),
 
+  // Pinned separately from the v2 values above, on purpose. Tuning v2's
+  // lifetimes must never shorten the window for handsets that cannot be
+  // updated. v1 has no refresh protocol, so this is the whole session.
+  LEGACY_ACCESS_TTL_SEC: Joi.number().integer().default(604800), // 7 days
+
   AWS_REGION: Joi.string().default('ap-southeast-1'),
   S3_BUCKET: Joi.string().required(),
   // Local dev talks to localstack; prod uses the instance role (no keys anywhere).

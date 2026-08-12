@@ -121,6 +121,33 @@ so this works across instances behind the load balancer with no new
 infrastructure. Swapping in Redis later is one class, and that is the trade
 recorded for ~20 instances.
 
+## Two auth systems, one identity
+
+v1.4.2 and v2 share the driver table and nothing else. The people are the same
+and their credentials must not fork; the tokens they are handed must.
+
+The reason is the constraint the brief leads with. The backend ships in an
+afternoon, the app waits weeks on store review, and 30% of the fleet is stuck
+on v1.4.2. If both surfaces read one token contract, then every change to v2's
+auth is a change to theirs: a shorter lifetime logs them out mid-round, a new
+required claim rejects them outright, and the deploy that does it looks
+harmless. That is the exact failure the no-breakage rule exists to prevent.
+
+So every token carries the surface it was minted for. v2 routes require the v2
+audience and the legacy controllers require the legacy one, which also means a
+token lifted from one surface cannot be replayed at the other. Routes are v2
+unless they say otherwise, so a new v2 controller cannot inherit the frozen
+contract by forgetting a decorator. The v1 lifetime is a separate setting from
+v2's, pinned so that tuning ours cannot shorten theirs, and v1 gets no refresh
+protocol at all: it was built before this backend existed and cannot learn one.
+Tests assert both rejections, because this is precisely the coupling that
+creeps back when someone adds a controller in a hurry.
+
+The v1 login contract is not in the brief, so ours stands in for it and is
+marked as an assumption. It lives in its own controller and service and
+deliberately does not call the v2 issuer: copying twenty lines is the cheaper
+mistake. If the real one differs, one file changes and no v2 code moves.
+
 ## Migration plan
 
 Expand/contract, with a flag as the rollback lever at every stage.
@@ -222,6 +249,27 @@ Observability beyond structured logs and health checks. Multi-depot
 modelling. The database half of the retention job (S3 expiry is live, see
 `PRIVACY.md`). ABI-split APKs: the universal build is 147MB, chosen over a
 smaller file that might not run on a reviewer's machine.
+
+## A round is one day
+
+"Today's stops" is exactly that: stops created today, selected fresh each
+morning. An undelivered parcel does not roll over on its own. Redelivery is
+dispatch creating tomorrow's stop, which is where the decision belongs anyway,
+since only dispatch knows whether a parcel goes back out, returns to sender or
+waits for the customer to call.
+
+Keeping the round a day wide is what makes the offline model simple. The device
+holds one day, the cache is replaceable, and "what am I doing now" never has to
+be computed by walking history. A round that carried state across days would
+turn every cold start into a reconciliation.
+
+The honest cost: attempt history does not follow the parcel. Tomorrow's stop is
+a new row, so a driver on their second visit sees a stop with no attempts, and
+nothing in the app says "carded here yesterday", which is exactly the context
+that would change how they approach the door. The fix is not to widen the round
+but to give stops a consignment reference, so attempts across days can be
+gathered against the parcel rather than the stop. That is a schema addition, not
+a redesign, and it is deliberately not built here.
 
 ## Assumptions
 
