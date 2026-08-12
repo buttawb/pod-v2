@@ -57,8 +57,26 @@ export default function App() {
 
   useEffect(() => {
     void boot();
-    return syncEngine.start();
   }, [boot]);
+
+  /**
+   * The sync engine must not start before the database is open.
+   *
+   * It used to start in the same effect as boot(), so its NetInfo
+   * subscription delivered its first event while openDatabase() was still in
+   * flight. That event calls kick(), kick() reads the session state, and that
+   * read throws "Database not opened; call openDatabase() during boot".
+   *
+   * Android won that race and iOS loses it every time, which is the useful
+   * kind of platform difference: the bug was always there and one platform
+   * was quietly getting away with it. Gating on `booting` states the ordering
+   * instead of leaving it to whichever platform delivers a connectivity event
+   * faster.
+   */
+  useEffect(() => {
+    if (booting) return;
+    return syncEngine.start();
+  }, [booting]);
 
   /**
    * Token expiry has to be able to reach the screen.
