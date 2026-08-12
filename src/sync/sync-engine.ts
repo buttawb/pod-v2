@@ -113,9 +113,28 @@ class SyncEngine {
   async kick(): Promise<void> {
     if (this.running) return;
     if (!this.online) return;
-    if ((await getSessionState()) === SessionState.NeedsReauth) return;
 
+    // Claim the slot synchronously, before anything yields.
+    //
+    // This flag used to be set after the session read below, which is a real
+    // SQLite round trip: a second kick arriving during it sailed past the
+    // guard, and two runs went down the queue with a `touched` set each,
+    // claiming the same row. Submit survived that, because its conditioned
+    // UPDATE makes the loser a no-op. The media phase did not: it re-asks for
+    // presigned URLs and re-PUTs the same bytes, so the driver pays twice for
+    // evidence already in flight. Every trigger here is fire-and-forget
+    // (finalize, pull-to-sync, boot, NetInfo, AppState, the 60s heartbeat),
+    // so two landing in the same tick is ordinary rather than exotic.
     this.running = true;
+    try {
+      if ((await getSessionState()) === SessionState.NeedsReauth) return;
+      await this.drain();
+    } finally {
+      this.running = false;
+    }
+  }
+
+  private async drain(): Promise<void> {
     const generation = (this.generation += 1);
     // One attempt that cannot progress must never strand the ones behind it:
     // the queue is claimed oldest-first, so a single stuck row would
@@ -123,38 +142,37 @@ class SyncEngine {
     // skipped rather than re-claimed, and the run ends when nothing new is
     // left instead of at the first failure.
     const touched = new Set<string>();
-    try {
-      for (;;) {
-        if (generation !== this.generation) break;
-        const attempt = await claimNextWorkable(touched);
-        if (!attempt) break;
-        touched.add(attempt.client_attempt_id);
+    // The running flag is owned by kick(), which releases it in its own
+    // finally. Releasing it here too would drop the guard while this loop was
+    // still unwinding.
+    for (;;) {
+      if (generation !== this.generation) break;
+      const attempt = await claimNextWorkable(touched);
+      if (!attempt) break;
+      touched.add(attempt.client_attempt_id);
 
-        try {
-          // Drive this attempt through as many phases as it will go: submit,
-          // upload, finalize. Stopping after one phase would leave a fresh
-          // capture waiting for the next trigger before its photos moved.
-          let current: AttemptRow | null = attempt;
-          for (let phase = 0; phase < MAX_PHASES_PER_ATTEMPT && current; phase += 1) {
-            const progressed = await this.processAttempt(current);
-            if (!progressed) break;
-            current = await getAttempt(attempt.client_attempt_id);
-            if (!current || !WORKABLE_STATES.includes(current.sync_state)) break;
-          }
-        } catch (err) {
-          // An unexpected throw must become a visible, driver-actionable
-          // row, never a silent stall of the entire queue.
-          await markNeedsAttention(
-            attempt.client_attempt_id,
-            FailureKind.Stuck,
-            'SYNC_INTERNAL',
-            err instanceof Error ? err.message : 'Internal sync error',
-          ).catch(() => undefined);
+      try {
+        // Drive this attempt through as many phases as it will go: submit,
+        // upload, finalize. Stopping after one phase would leave a fresh
+        // capture waiting for the next trigger before its photos moved.
+        let current: AttemptRow | null = attempt;
+        for (let phase = 0; phase < MAX_PHASES_PER_ATTEMPT && current; phase += 1) {
+          const progressed = await this.processAttempt(current);
+          if (!progressed) break;
+          current = await getAttempt(attempt.client_attempt_id);
+          if (!current || !WORKABLE_STATES.includes(current.sync_state)) break;
         }
-        this.notify();
+      } catch (err) {
+        // An unexpected throw must become a visible, driver-actionable
+        // row, never a silent stall of the entire queue.
+        await markNeedsAttention(
+          attempt.client_attempt_id,
+          FailureKind.Stuck,
+          'SYNC_INTERNAL',
+          err instanceof Error ? err.message : 'Internal sync error',
+        ).catch(() => undefined);
       }
-    } finally {
-      this.running = false;
+      this.notify();
     }
   }
 
