@@ -227,7 +227,9 @@ export function StopListScreen({
   const narrow = useCallback((next: StopFilter | null, text: string | null) => {
     // A remembered offset belongs to the list it was measured on.
     rememberedOffset = 0;
+    targetOffset.current = 0;
     restoreAttempts.current = 0;
+    restored.current = true;
     if (next !== null) setFilter(next);
     if (text !== null) setQuery(text);
   }, []);
@@ -235,6 +237,17 @@ export function StopListScreen({
   const listRef = useRef<FlatList<StopWithSync>>(null);
   const restored = useRef(false);
   const restoreAttempts = useRef(0);
+  /**
+   * The position to climb back to, captured once at mount.
+   *
+   * It cannot be read from `rememberedOffset` during the climb: every
+   * programmatic scroll fires onScroll, which writes the current position back
+   * into `rememberedOffset`. The ladder was overwriting its own target on each
+   * step and converging on wherever it had got to, which on a virtualised list
+   * is the top. So the target is frozen here and live tracking is suspended
+   * until the climb finishes.
+   */
+  const targetOffset = useRef(rememberedOffset);
 
   // Counted over the whole day, not the filtered view, so the chips answer
   // "is there anything there" without having to be tapped.
@@ -419,6 +432,8 @@ export function StopListScreen({
         ref={listRef}
         data={visible}
         onScroll={(event) => {
+          // Ignored while restoring, or the climb overwrites its own target.
+          if (!restored.current) return;
           rememberedOffset = event.nativeEvent.contentOffset.y;
         }}
         scrollEventThrottle={64}
@@ -438,11 +453,20 @@ export function StopListScreen({
           // growth carry us further. The attempt counter is the backstop for a
           // remembered offset that can never be reached, which happens when the
           // round came back shorter than it was.
-          if (restored.current || rememberedOffset <= 0) return;
+          if (restored.current) return;
 
-          if (height > rememberedOffset) {
+          const target = targetOffset.current;
+          if (target <= 0) {
             restored.current = true;
-            listRef.current?.scrollToOffset({ offset: rememberedOffset, animated: false });
+            return;
+          }
+
+          if (height > target) {
+            listRef.current?.scrollToOffset({ offset: target, animated: false });
+            // Marked done after the scroll, so the onScroll it triggers is
+            // still ignored and cannot clobber the position we just took.
+            restored.current = true;
+            rememberedOffset = target;
             return;
           }
 
