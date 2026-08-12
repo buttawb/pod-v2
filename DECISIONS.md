@@ -57,6 +57,27 @@ managers and killed by force-quit, the exact failure mode being defended
 against. The durable queue makes timing irrelevant, so this changes *when*
 evidence uploads, never *whether*.
 
+**A record and its evidence sync in two phases, and only one of them blocks
+visibility.** At roughly a million photographs a day on bad networks, treating
+an attempt as invisible until every image lands would mean a stop that was
+plainly delivered reads as undelivered for as long as the signal is poor, which
+is precisely when the office most needs to know. So the attempt is visible the
+moment its JSON is accepted, and the photographs catch up behind it.
+
+The second phase exists only when there is something to wait for.
+`evidence_status` is written `complete` on arrival when the attempt declared no
+media at all, so an outcome whose proof is a reason code is finished when it
+lands, and the client skips straight from acknowledged to synced rather than
+parking in a phase with an empty queue.
+
+The trigger is what the attempt **declared**, not what its outcome
+*required*. A driver who adds an optional photograph still expects to watch it
+arrive, and a badge reading "On server" while an image sat in the queue would
+be the exact lie this UI exists to avoid. So "On server" means both phases are
+done: the server acknowledged the record and verified every declared object in
+S3. Anything less says what is still outstanding, and the office sees the same
+distinction as "awaiting media" rather than a silently partial record.
+
 **Sessions are sized to a working life, not a browser tab**: a 7-day access
 token and a 90-day rotating refresh. The unit here is a driver's round, and a
 sign-in prompt on a doorstep in the rain costs a delivery. A handset can be out
