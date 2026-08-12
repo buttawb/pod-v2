@@ -1,6 +1,6 @@
 # Proof-of-Delivery v2 - Backend
 
-API, infrastructure and office dashboard for capturing proof-of-delivery
+API and infrastructure for capturing proof-of-delivery
 evidence, extending a live v1 system without breaking its clients.
 
 Driver app: **[pod-v2-app](https://github.com/buttawb/pod-v2-app)**.
@@ -13,7 +13,7 @@ Design rationale: **[DECISIONS.md](DECISIONS.md)**. Data protection:
 | | |
 |---|---|
 | API | https://18.139.240.68.sslip.io |
-| Office dashboard | https://18.139.240.68.sslip.io |
+| API reference | https://18.139.240.68.sslip.io/api/docs |
 | Android APK | https://pod-v2-apk-856942459927.s3.ap-southeast-1.amazonaws.com/pod-v2.apk |
 | Driver login | `EMP-TEST-001` / `TestDriver#2026` |
 | Office login | `office@demo.pod` / `OfficeDemo#2026` |
@@ -35,8 +35,6 @@ Dashboard ───┘   backend x2       ├── S3 (photos, presigned, priva
   `/api/v2` are served by one write path, so evidence rules cannot diverge.
   Photos never transit the API: clients PUT directly to S3 on presigned URLs
   and the server verifies each object with `HeadObject`.
-- **`dashboard/`** React + Vite (Metronic). Live status over SSE, backed by
-  Postgres `LISTEN/NOTIFY` so every instance sees every event.
 - **`infra/`** Terraform for EC2, S3, IAM (no static credentials anywhere),
   plus `deploy.sh` and the Caddy/Compose stack. Two API containers run behind
   the load balancer, so the multi-instance assumption is exercised, not assumed.
@@ -70,9 +68,6 @@ npm run migration:run
 npm run seed                            # prints the demo logins
 AWS_PROFILE=personal npm run start:dev  # profile is for S3 presign + Bedrock
 
-# 3. The dashboard (separate shell)
-cd dashboard && npm install
-VITE_API_BASE=http://localhost:3000 npm run dev
 ```
 
 Tests: `npm test` (unit) and `npm run test:e2e` (needs a seeded database).

@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
+import { ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
 import { Roles } from '../../common/auth/jwt-auth.guard';
 import type { JwtPayload } from '../../common/auth/jwt-payload';
@@ -23,6 +24,7 @@ import { S3Service } from './s3.service';
  * bucket stays fully private.
  */
 @Roles('driver', 'office')
+@ApiTags('media')
 @Controller({ path: 'media', version: '2' })
 export class MediaController {
   constructor(

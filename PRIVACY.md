@@ -22,7 +22,7 @@ for.
   signature image, not a name field. A neighbour is a house number.
 - **No recipient contact details.** There is no phone or email column.
 - **No driver location history.** Position is recorded per attempt, never
-  as a continuous trace, and the office dashboard shows delivery status,
+  as a continuous trace, and the office read APIs expose delivery status,
   not driver movement.
 - **No EXIF.** The APP1 segment is stripped from every photograph on the
   device before it is stored or uploaded (`src/capture/exif.ts` in the app

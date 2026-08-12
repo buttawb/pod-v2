@@ -18,8 +18,8 @@
 
 	# Privacy policy, at a clean public path because it is what the Google
 	# Play listing links to. Play re-checks the URL after launch and enforces
-	# against apps whose policy stops resolving, so it must not fall through
-	# to the SPA below, which would answer with the dashboard's login.
+	# against apps whose policy stops resolving, so it gets its own route
+	# rather than depending on anything below it.
 	# A named matcher, because `handle` takes exactly one matcher token.
 	@privacy path /privacy /privacy/
 	handle @privacy {
@@ -31,10 +31,14 @@
 		}
 	}
 
-	# Office dashboard: static SPA build.
+	# There is no web front end, by design: the office is served by read APIs.
+	# So the root of this host is the API reference. Anyone who lands here gets
+	# the contract rather than a login screen they have no account for.
+	# `*` is required: Caddy reads a leading-slash first argument as a path
+	# matcher, so `redir /api/docs permanent` silently means "match /api/docs,
+	# redirect to the literal string permanent" and everything else falls
+	# through to an empty 200.
 	handle {
-		root * /srv/dashboard
-		try_files {path} /index.html
-		file_server
+		redir * /api/docs permanent
 	}
 }

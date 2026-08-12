@@ -1,4 +1,5 @@
 import { Body, Controller, Post, VERSION_NEUTRAL } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import { Public } from '../../common/auth/jwt-auth.guard';
 import { LegacyLoginDto } from './dto/legacy-login.dto';
 import { LegacyAuthService } from './legacy-auth.service';
@@ -17,6 +18,7 @@ import { LegacyAuthService } from './legacy-auth.service';
  * tests. Documented as an assumption. If the real one differs, this is the one
  * file that changes, and no v2 code moves.
  */
+@ApiTags('v1 (frozen)')
 @Controller({ path: 'auth', version: VERSION_NEUTRAL })
 export class LegacyAuthController {
   constructor(private readonly legacyAuth: LegacyAuthService) {}

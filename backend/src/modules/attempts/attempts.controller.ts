@@ -1,4 +1,5 @@
 import { Body, Controller, HttpCode, Param, ParseUUIDPipe, Post } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
 import { Roles } from '../../common/auth/jwt-auth.guard';
 import type { JwtPayload } from '../../common/auth/jwt-payload';
@@ -6,6 +7,7 @@ import { AttemptsService } from './attempts.service';
 import { CreateAttemptDto } from './dto/create-attempt.dto';
 
 @Roles('driver')
+@ApiTags('attempts')
 @Controller({ path: 'attempts', version: '2' })
 export class AttemptsController {
   constructor(private readonly attemptsService: AttemptsService) {}

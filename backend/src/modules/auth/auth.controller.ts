@@ -1,9 +1,11 @@
 import { Body, Controller, HttpCode, Post } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Public } from '../../common/auth/jwt-auth.guard';
 import { AuthService } from './auth.service';
 import { DriverLoginDto, OfficeLoginDto, RefreshDto } from './dto/auth.dtos';
 
+@ApiTags('auth')
 @Controller({ path: 'auth', version: '2' })
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
