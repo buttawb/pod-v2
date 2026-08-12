@@ -1,93 +1,78 @@
-# Proof-of-Delivery v2 - Backend
+# Proof of Delivery v2
 
-API and infrastructure for capturing proof-of-delivery
-evidence, extending a live v1 system without breaking its clients.
+An Android driver app and a deployed API, built on top of a live v1 system whose
+handsets cannot be updated. Two repositories:
 
-Driver app: **[pod-v2-app](https://github.com/buttawb/pod-v2-app)**.
-Design rationale: **[DECISIONS.md](DECISIONS.md)**. Data protection:
-**[PRIVACY.md](PRIVACY.md)**. Load numbers:
-**[loadtest/results/RESULTS.md](loadtest/results/RESULTS.md)**.
-
-**v1 contract.** The frozen v1.4.2 surface is pinned by an e2e suite
-(`backend/test/legacy-contract.e2e-spec.ts`, requires a database; `npm test`
-skips it with a reason when none is reachable) and was verified by curl against
-the deployed API on 2026-08-12: login body and `{token}` response, 24h token,
-409 on duplicate POD, exact pod key set, unbounded stop list, and pod
-`id`/`created_at` stability across re-projection.
+- **Backend** (this repo) — https://github.com/buttawb/pod-v2-backend
+- **Driver app** — https://github.com/buttawb/pod-v2-app
 
 ## Try it
 
 | | |
 |---|---|
 | API | https://18.139.240.68.sslip.io |
-| API reference | https://18.139.240.68.sslip.io/api/docs |
-| Android APK | https://pod-v2-apk-856942459927.s3.ap-southeast-1.amazonaws.com/pod-v2.apk |
-| Driver login | `EMP-TEST-001` / `TestDriver#2026` |
+| API docs | https://18.139.240.68.sslip.io/api/docs (Authorize with a token from any login below) |
+| Android APK | _see releases / link in the submission email_ |
+| Driver login | `EMP-TEST-001` / `TestDriver#2026` (London round, 151 stops) |
+| Karachi round | `EMP-PK-001` / `TestDriver#2026` (320-stop Pakistan depot) |
 | Office login | `office@demo.pod` / `OfficeDemo#2026` |
-
-Seeded with 5,000 stops across Greater London for today, 150 of them on the
-test driver's route, plus 3,000 historical v1 `pods` rows so the backfill can
-be run and verified against real data.
-
-## Architecture
-
-```
-Driver app ──┐                    ┌── Postgres (evidence, append-only)
-             ├── Caddy (TLS, LB) ─┤
-Dashboard ───┘   backend x2       ├── S3 (photos, presigned, private)
-                                  └── Bedrock (customer summaries)
-```
-
-- **`backend/`** NestJS + TypeORM. The frozen v1 surface (`/api/stops`) and
-  `/api/v2` are served by one write path, so evidence rules cannot diverge.
-  Photos never transit the API: clients PUT directly to S3 on presigned URLs
-  and the server verifies each object with `HeadObject`.
-- **`infra/`** Terraform for EC2, S3, IAM (no static credentials anywhere),
-  plus `deploy.sh` and the Caddy/Compose stack. Two API containers run behind
-  the load balancer, so the multi-instance assumption is exercised, not assumed.
-- **`loadtest/`** k6 scenarios and recorded results.
-
-## Layout
-
-```
-backend/src/
-  domain/outcomes.ts        the evidence matrix; one source of truth
-  modules/attempts/         THE write path: idempotency, evidence, projection
-  modules/legacy/           frozen v1 adapter + shape-pinned contract tests
-  modules/media/            presign and verify
-  modules/sync/             delta sync for the app
-  modules/office/           live feed (SSE) and listing
-  modules/ai/               Bedrock summaries with timeout, breaker, fallback
-  database/migrations/      numbered expand/contract steps
-scripts/backfill-pods.ts    checkpointed, resumable, self-verifying
-```
 
 ## Run it locally
 
 ```bash
-# 1. A Postgres the API can reach (any 14+ will do):
-createdb -p 5433 -O pod pod   # after: CREATE ROLE pod LOGIN PASSWORD '...';
-
-# 2. The API
-cd backend && cp .env.example .env      # point DATABASE_URL at that database
-npm install
-npm run migration:run
-npm run seed                            # prints the demo logins
-AWS_PROFILE=personal npm run start:dev  # profile is for S3 presign + Bedrock
-
+git clone https://github.com/buttawb/pod-v2-backend && cd pod-v2-backend
+docker compose -f infra/docker-compose.dev.yml up -d      # Postgres on 5433
+cd backend && npm ci && npm run migrate && npm run seed   # schema + 5,000 stops
+npm run start:dev                                         # API on :3000, docs at /api/docs
+cd ../../pod-v2-app && npm ci && npx expo run:android      # driver app on a device
 ```
 
-Tests: `npm test` (unit) and `npm run test:e2e` (needs a seeded database).
-The e2e suite covers the idempotency race under concurrency, the evidence
-matrix, refresh-token rotation, and the v1 contract shape.
+## How it fits together
 
-## Deploy
+The device database is the system of record until the server confirms
+otherwise. Every screen reads SQLite; the network only ever writes to it, which
+is what makes a cold start in a basement render the full day.
+
+Capture writes a draft, and one conditioned UPDATE finalizes it. A background
+worker then drives each attempt through submit, upload and finalize, keyed on a
+client-generated UUID so a retry is never a second delivery.
+
+Evidence is append-only, enforced by the database rather than by the
+application: the runtime role holds no DELETE on `delivery_attempts` or
+`attempt_photos`, and its UPDATE grant names four bookkeeping columns one by
+one. Photographs go straight to a private bucket by presigned PUT and are only
+ever read back through an authenticated, short-lived redirect.
+
+The v1 surface is frozen and dual-written. A delivery recorded through the new
+attempts model is projected into the old `pods` table in the same transaction,
+so a v1.4.2 handset that will never be updated keeps seeing what it expects.
+
+`SCHEMA.md` has every table, column, constraint and grant, read out of the
+deployed database rather than assembled from the migrations.
+
+## The frozen v1 contract
+
+Pinned by the e2e suite in `backend/test/legacy-contract.e2e-spec.ts` (it needs a
+database, and skips loudly without one), and verified by curl against the
+deployed API on 2026-08-12.
+
+Check it by hand:
 
 ```bash
-cd infra/terraform && terraform apply   # EC2, S3, IAM
-cd .. && ./deploy.sh --migrate --seed
+curl -sS -X POST https://18.139.240.68.sslip.io/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"emp-test-001@fleet.local","password":"TestDriver#2026"}'
 ```
 
-Secrets are generated on the server at first deploy and never committed.
-Migrations run as the owner role; the API connects as `pod_app`, which holds
-no `UPDATE` or `DELETE` on evidence tables.
+```bash
+TOKEN=$(curl -sS -X POST https://18.139.240.68.sslip.io/api/auth/login -H 'Content-Type: application/json' -d '{"email":"emp-test-001@fleet.local","password":"TestDriver#2026"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])') && curl -sS https://18.139.240.68.sslip.io/api/stops -H "Authorization: Bearer $TOKEN" | head -c 600
+```
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' -X POST "https://18.139.240.68.sslip.io/api/stops/$STOP_ID/pod" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"delivered":true,"note":"hand check"}'
+```
+
+The first returns exactly `{"token":"..."}` and nothing else. The second returns
+the full array with a `pod` object on every delivered stop, including deliveries
+recorded through v2. The third returns 201 the first time and 409 on a repeat
+for the same stop.
