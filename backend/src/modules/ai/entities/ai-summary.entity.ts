@@ -1,9 +1,31 @@
 import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
 
+/**
+ * Four outcomes, not two, because an office user needs to know which one they
+ * are looking at before they send it to a customer.
+ *
+ * `ready` is a model draft that passed validation. `fallback` is the
+ * deterministic template for the outcome: still safe to send, but nobody
+ * wrote it about this delivery, so it says nothing the outcome code did not
+ * already say. `failed` is the honest answer when even the fallback could not
+ * be stored: the row used to sit on `pending` forever in that case, which
+ * reads on screen as "still working on it" and never resolves. `approved` is
+ * set when a named human has signed off, which is what actually authorises
+ * sending it.
+ *
+ * `source` answers a different question (`bedrock` vs `template`) and both are
+ * exposed, because "the AI wrote this" and "a human approved this" are
+ * independent facts and collapsing them would let a template be presented as
+ * a model draft.
+ *
+ * Stored in a plain text column, so adding a value needs no migration.
+ */
 export const AiSummaryStatus = {
   Pending: 'pending',
   Ready: 'ready',
   Fallback: 'fallback',
+  Failed: 'failed',
+  Approved: 'approved',
 } as const;
 
 export type AiSummaryStatus = (typeof AiSummaryStatus)[keyof typeof AiSummaryStatus];

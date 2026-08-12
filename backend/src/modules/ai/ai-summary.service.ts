@@ -19,7 +19,12 @@ import { AiSummaryCache } from './entities/ai-summary-cache.entity';
 import { FALLBACK_TEMPLATES } from './templates';
 import { scrubNote, validateSummaryOutput } from './output-validation';
 
-const PROMPT_VERSION = 'v1';
+/**
+ * Bump this whenever SYSTEM_PROMPT changes. It is part of the cache key, so
+ * leaving it alone would keep serving text generated under the old prompt:
+ * v1 was allowed to name the hiding place, and those summaries are cached.
+ */
+const PROMPT_VERSION = 'v2';
 const MAX_CONCURRENT_GENERATIONS = 4;
 const RETRY_BASE_DELAY_MS = 250;
 const MEMORY_CACHE_MAX = 10_000;
@@ -29,7 +34,8 @@ const USD_PER_INPUT_MTOK = 1;
 const USD_PER_OUTPUT_MTOK = 5;
 
 const SYSTEM_PROMPT = `You rewrite a courier's internal delivery note into one short sentence suitable for the parcel's recipient.
-Rules: maximum 140 characters; exactly one line; plain, friendly English; never include names, house numbers, street names, postcodes, phone numbers, or times; never speculate beyond the note; never make promises such as redelivery times; if the note is empty or unusable, output exactly INSUFFICIENT.`;
+Rules: maximum 140 characters; exactly one line; plain, friendly English; never include names, house numbers, street names, postcodes, phone numbers, or times; never speculate beyond the note; never make promises such as redelivery times; if the note is empty or unusable, output exactly INSUFFICIENT.
+Never name the specific hiding place for a parcel left unattended. Say that it was left in a safe place, not which bin, shed, porch, doorway or container it is behind or inside. The recipient is told the exact location through the authenticated app, never in a message that can be read from a lock screen or a shared mailbox.`;
 
 interface BedrockResult {
   text: string;
@@ -64,7 +70,12 @@ export class AiSummaryService {
   ) {
     this.enabled = this.config.get<boolean>('AI_ENABLED', true);
     this.modelId = this.config.getOrThrow<string>('BEDROCK_MODEL_ID');
-    this.timeoutMs = this.config.get<number>('AI_TIMEOUT_MS', 3000);
+    // 3s cut off legitimate slow-but-fine generations and spent the retry
+    // budget on them, so a transient tail turned into a template. Nothing
+    // waits on this call (the driver's submit path emits an event and
+    // returns), so the only cost of waiting longer is a summary appearing a
+    // couple of seconds later in the office.
+    this.timeoutMs = this.config.get<number>('AI_TIMEOUT_MS', 5000);
     this.bedrock = new BedrockRuntimeClient({
       region: this.config.getOrThrow<string>('AWS_REGION'),
       maxAttempts: 1, // our retry layer is the only one; SDK retries would multiply worst-case latency
@@ -83,12 +94,40 @@ export class AiSummaryService {
 
   @OnEvent(ATTEMPT_CREATED_EVENT, { async: true })
   async onAttemptCreated(event: AttemptCreatedEvent): Promise<void> {
-    await this.withSlot(() => this.generate(event.attemptId, event.outcome as Outcome, event.note));
+    await this.withSlot(async () => {
+      try {
+        await this.generate(event.attemptId, event.outcome as Outcome, event.note);
+      } catch (err) {
+        // generate() converts provider failures into a template itself, so
+        // reaching here means the store failed, not the model. That used to
+        // leave the row on `pending` forever, which the office reads as
+        // "generating" and which never resolves.
+        await this.storeFailed(event.attemptId, err);
+        throw err;
+      }
+    });
   }
 
   async getSummary(attemptId: string) {
     const summary = await this.summaries.findOne({ where: { attemptId } });
-    if (!summary) return { attemptId, status: 'none' };
+    // Same keys whether or not a row exists. This branch used to return two
+    // keys and nothing else, so a consumer reading `source` to tell a model
+    // draft from a template got `undefined` here and had no way to know
+    // whether that meant "template" or "no summary at all".
+    if (!summary) {
+      return {
+        attemptId,
+        status: 'none',
+        draft: null,
+        source: null,
+        model: null,
+        finalText: null,
+        editedBy: null,
+        editedAt: null,
+        sentAt: null,
+        generatedAt: null,
+      };
+    }
     return this.serialize(summary);
   }
 
@@ -124,6 +163,11 @@ export class AiSummaryService {
     await this.summaries.update(
       { id: summary.id },
       {
+        // A named human clicking Send is the approval, and the record has to
+        // say so: `ready` only ever meant "the model produced something that
+        // validated", which is not the same claim as "a person stands behind
+        // this text".
+        status: AiSummaryStatus.Approved,
         finalText: summary.finalText ?? summary.draftText,
         editedBy: summary.editedBy ?? officeUserId,
         sentAt: new Date(),
@@ -265,6 +309,25 @@ export class AiSummaryService {
     );
     this.logger.log(
       JSON.stringify({ event: 'ai_fallback', outcome, reason, breakerOpen: this.breaker.opened }),
+    );
+  }
+
+  /**
+   * The end of the line: no model draft and no template either.
+   *
+   * Best-effort by design. If this write fails too there is nothing further
+   * to try, and throwing here would replace a bad status with a lost one.
+   */
+  private async storeFailed(attemptId: string, err: unknown): Promise<void> {
+    await this.summaries
+      .update({ attemptId }, { status: AiSummaryStatus.Failed, generatedAt: new Date() })
+      .catch(() => undefined);
+    this.logger.error(
+      JSON.stringify({
+        event: 'ai_failed',
+        attemptId,
+        reason: err instanceof Error ? err.message : 'unknown',
+      }),
     );
   }
 

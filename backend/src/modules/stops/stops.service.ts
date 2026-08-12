@@ -182,11 +182,11 @@ export class StopsService {
     }
 
     const rows = (await this.dataSource.query(
-      `SELECT id, status, sequence, lat, lng
+      `SELECT id, status, lat, lng
          FROM stops
         WHERE ${where}${limitClause}`,
       params,
-    )) as Array<{ id: string; status: StopStatus; sequence: number; lat: number; lng: number }>;
+    )) as Array<{ id: string; status: StopStatus; lat: number; lng: number }>;
 
     // A silently truncated map is a lie about coverage, so say so and let the
     // client tell the operator to zoom in rather than trust what it sees.
@@ -199,7 +199,13 @@ export class StopsService {
       features: (wantsEverything ? rows : rows.slice(0, StopsService.MAX_POINTS)).map((r) => ({
         type: 'Feature',
         geometry: { type: 'Point', coordinates: [r.lng, r.lat] },
-        properties: { id: r.id, s: STATUS_CODE[r.status] ?? 0, q: r.sequence },
+        // Id, status and coordinates only. The round sequence used to ride
+        // along as `q`, and nothing rendered it: ordered positions plus
+        // coordinates plus a day is a reconstruction of the driver's route,
+        // which is a movement record about a person rather than a map of
+        // where the work is. Data minimisation is about what is sent, not
+        // about what the client chooses to draw.
+        properties: { id: r.id, s: STATUS_CODE[r.status] ?? 0 },
       })),
     };
   }

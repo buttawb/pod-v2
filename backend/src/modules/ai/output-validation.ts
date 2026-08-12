@@ -5,6 +5,24 @@ const EMAIL = /[\w.+-]+@[\w-]+\.[\w.]+/;
 const BANNED_WORDS = /\b(guarantee|guaranteed|refund|compensation|lawsuit|liable)\b/i;
 
 /**
+ * A named hiding place for an unattended parcel.
+ *
+ * The prompt already forbids this, but a prompt is a request and this is the
+ * last thing between the model and a customer, so it is enforced here too.
+ * The risk is not that the recipient learns where their parcel is: they need
+ * to know, and the app tells them behind authentication. It is that this text
+ * goes out over channels that are readable without it, on a lock screen or in
+ * a shared mailbox, and a thief who reads it is told exactly where to look.
+ *
+ * Deliberately narrow: a placement preposition immediately before a container
+ * word. That is what makes "left it behind the green bin" a rejection while
+ * "handed to you at the door" is not, and a false rejection is cheap anyway
+ * since it routes to the generic template rather than dropping the summary.
+ */
+const NAMED_SAFE_PLACE =
+  /\b(in|inside|behind|under|underneath|beside|by|next to|round the back of)\s+(the\s+|a\s+|your\s+)?(?:\w+\s+)?(bin|bins|wheelie bin|shed|porch|greenhouse|garage|carport|conservatory|meter box|letterbox|mailbox|post box|plant pot|planter|flower pot|doorstep|doormat|mat|gate|fence|hedge|bush|rear door|back door|side door|front door|window|recycling box|coal bunker|log store|bike store|caravan|summerhouse|outhouse)\b/i;
+
+/**
  * Scrubbing needs every match; validation needs only to know whether one
  * exists. Kept as separate literals rather than adding /g above, because
  * `RegExp.test` with a global pattern advances lastIndex between calls and
@@ -36,6 +54,7 @@ export function validateSummaryOutput(text: string): string | null {
   if (PHONE.test(trimmed)) return 'contains_phone';
   if (EMAIL.test(trimmed)) return 'contains_email';
   if (BANNED_WORDS.test(trimmed)) return 'contains_banned_word';
+  if (NAMED_SAFE_PLACE.test(trimmed)) return 'names_safe_place';
   return null;
 }
 

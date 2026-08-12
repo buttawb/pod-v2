@@ -56,11 +56,16 @@ export class DeliveryAttempt {
   @Column({ type: 'text', nullable: true })
   note!: string | null;
 
-  @Column({ type: 'double precision' })
-  lat!: number;
+  /**
+   * Null means the handset had no fix, which is a real and common answer
+   * (basement, car park, revoked permission, cold start). It is not the same
+   * claim as 0,0, which is a coordinate in the Gulf of Guinea.
+   */
+  @Column({ type: 'double precision', nullable: true })
+  lat!: number | null;
 
-  @Column({ type: 'double precision' })
-  lng!: number;
+  @Column({ type: 'double precision', nullable: true })
+  lng!: number | null;
 
   @Column({ name: 'gps_accuracy_m', type: 'real', nullable: true })
   gpsAccuracyM!: number | null;

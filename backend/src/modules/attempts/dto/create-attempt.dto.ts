@@ -79,13 +79,19 @@ export class CreateAttemptDto {
   @MaxLength(500)
   note?: string;
 
+  /**
+   * Omit both when the handset had no fix. Sending 0,0 to satisfy a required
+   * field records a position in the Gulf of Guinea as though it were observed.
+   */
+  @IsOptional()
   @IsNumber()
   @IsLatitude()
-  lat!: number;
+  lat?: number;
 
+  @IsOptional()
   @IsNumber()
   @IsLongitude()
-  lng!: number;
+  lng?: number;
 
   @IsOptional()
   @IsNumber()
