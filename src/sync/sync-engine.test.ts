@@ -286,6 +286,123 @@ describe('one worker at a time', () => {
   });
 });
 
+/**
+ * The stuck-evidence incident, as a test.
+ *
+ * A photo reached S3 and the server would not verify it, so finalize kept
+ * answering "not complete". The handset showed "finishing evidence upload"
+ * indefinitely, and the one thing that made it look survivable was that the
+ * client had already marked a photo confirmed on its own authority. It had
+ * not been acknowledged by anything.
+ *
+ * Two properties are pinned here: the client never claims evidence is on the
+ * server until the server says so, and the attempt reaches synced under its
+ * own recheck, with no app lifecycle event to rescue it. The test fires no
+ * AppState or NetInfo events at all, so reaching synced can only have come
+ * from the engine's own scheduling.
+ */
+describe('evidence is never confirmed ahead of the server', () => {
+  it('rechecks on its own and reaches synced with no lifecycle event', async () => {
+    rows.set('a1', attempt({ sync_state: SyncState.AttemptAcked, server_attempt_id: 'srv-1' }));
+    photosByAttempt.set('a1', [
+      photo({ photo_index: 0 }),
+      photo({
+        photo_index: 100,
+        kind: 'signature',
+        local_path: 'file:///evidence/a1-sig.png',
+      }),
+    ]);
+
+    // The server has the bytes but has not verified them yet: exactly what a
+    // finalize issued moments after the PUT returned 200 sees.
+    let serverVerified = false;
+    const retries: Array<{ code: string; firstDelayMs?: number }> = [];
+    (repo.scheduleRetry as jest.Mock).mockImplementation(
+      async (id: string, code: string, _msg: string, opts: { firstDelayMs?: number } = {}) => {
+        retries.push({ code, firstDelayMs: opts.firstDelayMs });
+        const row = rows.get(id);
+        // Park it exactly as the real repo would, so the next kick has to
+        // clear the gate rather than sail through.
+        if (row) rows.set(id, { ...row, next_retry_at: 'later', retry_count: row.retry_count + 1 });
+      },
+    );
+    (repo.claimNextWorkable as jest.Mock).mockImplementation(async (skip: Set<string>) => {
+      claimSkips.push(new Set(skip));
+      for (const row of rows.values()) {
+        if (skip.has(row.client_attempt_id)) continue;
+        if (row.next_retry_at) continue;
+        if (
+          ([SyncState.Queued, SyncState.AttemptAcked, SyncState.UploadingMedia] as SyncState[])
+            .includes(row.sync_state)
+        ) {
+          return row;
+        }
+      }
+      return null;
+    });
+
+    api.mockImplementation(async (path: string) => {
+      if (path.endsWith('/upload-urls')) {
+        return [
+          { kind: 'photo', photoIndex: 0, s3Key: 'k0', url: 'https://s3.test/0' },
+          { kind: 'signature', s3Key: 'ksig', url: 'https://s3.test/sig' },
+        ];
+      }
+      return {
+        attemptComplete: serverVerified,
+        evidenceStatus: serverVerified ? 'complete' : 'pending_media',
+      };
+    });
+    upload.mockResolvedValue(undefined);
+
+    await syncEngine.kick();
+
+    // Both PUTs returned 200 and the server still says no. Nothing may be
+    // called confirmed on the strength of a 200 from S3.
+    expect(upload).toHaveBeenCalledTimes(2);
+    const confirmedEarly = (photosByAttempt.get('a1') ?? []).filter(
+      (p) => p.upload_state === PhotoUploadState.Confirmed,
+    );
+    expect(confirmedEarly).toHaveLength(0);
+    expect(rows.get('a1')?.sync_state).not.toBe(SyncState.Synced);
+
+    // And it asks again quickly, rather than treating "too early" as a fault
+    // and disappearing into exponential backoff.
+    expect(retries).toEqual([{ code: 'MEDIA_INCOMPLETE', firstDelayMs: 5000 }]);
+
+    // The recheck falls due and the server has caught up. No AppState change,
+    // no NetInfo edge, no user action.
+    serverVerified = true;
+    const parked = rows.get('a1')!;
+    rows.set('a1', { ...parked, next_retry_at: null });
+    await syncEngine.kick();
+
+    expect(rows.get('a1')?.sync_state).toBe(SyncState.Synced);
+    expect(
+      (photosByAttempt.get('a1') ?? []).every(
+        (p) => p.upload_state === PhotoUploadState.Confirmed,
+      ),
+    ).toBe(true);
+  });
+
+  it('does not confirm an object the server returned no target for', async () => {
+    rows.set('a1', attempt({ sync_state: SyncState.AttemptAcked, server_attempt_id: 'srv-1' }));
+    photosByAttempt.set('a1', [photo({ photo_index: 0 })]);
+
+    // The server asks for nothing. That used to be read as "it already holds
+    // it" and the row was marked confirmed without a byte being sent.
+    api.mockImplementation(async (path: string) => {
+      if (path.endsWith('/upload-urls')) return [];
+      return { attemptComplete: false, evidenceStatus: 'pending_media' };
+    });
+
+    await syncEngine.kick();
+
+    expect(upload).not.toHaveBeenCalled();
+    expect(photosByAttempt.get('a1')?.[0].upload_state).not.toBe(PhotoUploadState.Confirmed);
+  });
+});
+
 describe('a stuck attempt never strands the queue behind it', () => {
   it('does not claim a row it already handled in this cycle', async () => {
     rows.set('a1', attempt());
