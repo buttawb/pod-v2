@@ -8,6 +8,13 @@ Design rationale: **[DECISIONS.md](DECISIONS.md)**. Data protection:
 **[PRIVACY.md](PRIVACY.md)**. Load numbers:
 **[loadtest/results/RESULTS.md](loadtest/results/RESULTS.md)**.
 
+**v1 contract.** The frozen v1.4.2 surface is pinned by an e2e suite
+(`backend/test/legacy-contract.e2e-spec.ts`, requires a database; `npm test`
+skips it with a reason when none is reachable) and was verified by curl against
+the deployed API on 2026-08-12: login body and `{token}` response, 24h token,
+409 on duplicate POD, exact pod key set, unbounded stop list, and pod
+`id`/`created_at` stability across re-projection.
+
 ## Try it
 
 | | |

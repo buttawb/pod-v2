@@ -5,6 +5,7 @@ import request from 'supertest';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
+import { describeWithDb } from './requires-db';
 
 /**
  * Refresh-token rotation under the real threat model: a courier app that
@@ -15,7 +16,7 @@ import { configureApp } from '../src/app.setup';
  */
 const sha256Hex = (plain: string) => createHash('sha256').update(plain).digest('hex');
 
-describe('refresh rotation (e2e)', () => {
+describeWithDb('refresh rotation (e2e)', () => {
   let app: INestApplication;
   let dataSource: DataSource;
 

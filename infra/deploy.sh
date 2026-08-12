@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Deploy the backend stack to the EC2 host provisioned by terraform/.
-# Usage: ./deploy.sh [--seed] [--migrate]
+# Usage: ./deploy.sh [--seed] [--skip-migrate]
+#
+# Migrations run by default, before the new code serves. --skip-migrate is an
+# escape hatch for a code-only rollback, not a normal path.
 # First run generates server-side secrets in /home/ec2-user/pod-v2/.env
 # (secrets live on the server only, never in the repo).
 set -euo pipefail
@@ -57,9 +60,33 @@ pathlib.Path('.env').write_text('\\n'.join(f'{k}={v}' for k, v in env.items()) +
 PYEOF
 chmod 600 .env && rm -f /tmp/pod-secrets.json"
 
-echo "==> Building image and starting stack"
-$SSH "cd ${REMOTE_DIR} && docker build -t pod-backend:latest backend/ \
-  && docker compose -f docker-compose.prod.yml --env-file .env up -d --remove-orphans"
+echo "==> Building image"
+$SSH "cd ${REMOTE_DIR} && docker build -t pod-backend:latest backend/"
+
+# Migrations run BY DEFAULT, and BEFORE the new code serves a single request.
+#
+# They used to be opt-in behind --migrate, and to run after `compose up`. Both
+# were wrong in the same way: a deploy that forgot the flag, or that raced it,
+# put code in front of traffic that queried columns the database did not have
+# yet. That is not a subtle failure - it is a 500 on the first request, and it
+# happened here on the deploy that added drivers.email.
+#
+# Running first is safe because the migrations are expand-only by policy: they
+# add, never rename or drop, so the OLD code keeps working against the NEW
+# schema for the seconds between these two steps. Contract steps are a separate,
+# deliberate release. Applied migrations are tracked, so this is a no-op when
+# nothing is pending.
+if [[ "${*:-}" == *--skip-migrate* ]]; then
+  echo "==> SKIPPING migrations (--skip-migrate)"
+else
+  echo "==> Running migrations (as owner role, before the new code serves)"
+  $SSH "cd ${REMOTE_DIR} && docker compose -f docker-compose.prod.yml --env-file .env run --rm \
+    -e DATABASE_URL=\$(grep '^DATABASE_OWNER_URL=' .env | cut -d= -f2-) \
+    backend-1 node dist/database/migrate.js"
+fi
+
+echo "==> Starting stack"
+$SSH "cd ${REMOTE_DIR} && docker compose -f docker-compose.prod.yml --env-file .env up -d --remove-orphans"
 
 # The Caddyfile is bind-mounted as a single FILE, and rsync ships a new file
 # then renames it into place. The rename gives it a fresh inode, and a bind
@@ -81,13 +108,6 @@ echo "==> Reloading Caddy onto the new config"
 # survive and nothing is re-requested from Let's Encrypt.
 $SSH "cd ${REMOTE_DIR} && docker compose -f docker-compose.prod.yml --env-file .env \
   up -d --force-recreate caddy"
-
-if [[ "${*:-}" == *--migrate* ]]; then
-  echo "==> Running migrations (as owner role)"
-  $SSH "cd ${REMOTE_DIR} && docker compose -f docker-compose.prod.yml --env-file .env run --rm \
-    -e DATABASE_URL=\$(grep '^DATABASE_OWNER_URL=' .env | cut -d= -f2-) \
-    backend-1 node dist/database/migrate.js"
-fi
 
 if [[ "${*:-}" == *--seed* ]]; then
   echo "==> Seeding (as owner role)"

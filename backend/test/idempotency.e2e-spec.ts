@@ -6,6 +6,7 @@ import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
 import { S3Service } from '../src/modules/media/s3.service';
+import { describeWithDb } from './requires-db';
 
 /**
  * The flagship test: proves the unique index on client_attempt_id is the
@@ -16,7 +17,7 @@ import { S3Service } from '../src/modules/media/s3.service';
  * Runs against the real seeded Postgres; S3 is stubbed (presign is not what
  * is under test, and evidence acceptance must not depend on S3 anyway).
  */
-describe('attempt submission idempotency (e2e)', () => {
+describeWithDb('attempt submission idempotency (e2e)', () => {
   let app: INestApplication;
   let dataSource: DataSource;
   let token: string;

@@ -6,6 +6,7 @@ import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
 import { S3Service } from '../src/modules/media/s3.service';
+import { describeWithDb } from './requires-db';
 
 /**
  * The frozen v1.4.2 contract, as the client specified it.
@@ -33,7 +34,7 @@ function decodeJwt(token: string): { exp: number; iat: number; aud?: string; sub
   return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as never;
 }
 
-describe('v1 legacy contract (e2e)', () => {
+describeWithDb('v1 legacy contract (e2e)', () => {
   let app: INestApplication;
   let dataSource: DataSource;
   let token: string;
