@@ -11,6 +11,7 @@ import {
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { apiRequest } from '../api/client';
+import { runCameraTour } from './perf-harness';
 import { getTodayStops, type StopWithSync } from '../db/stops-repo';
 import { Button, colors, radius, shadow, spacing, type } from '../ui/components';
 import { navigateTo } from './navigate-to';
@@ -105,11 +106,28 @@ export function DepotMapScreen({
   // newer one that already arrived.
   const requestId = useRef(0);
 
+  /**
+   * The before-and-after switch for the depot map's performance claim.
+   *
+   * `legacy` is what this screen did first: ask for every stop the depot owns,
+   * once, and let the client cluster 5,000 features itself. `viewport` is what
+   * it does now: send the rectangle and the zoom, and let Postgres aggregate.
+   * Both live in the shipped build so the comparison can be re-run on the same
+   * binary, on the same handset, against the same data, rather than quoted
+   * from two builds that differed in other ways too.
+   */
+  const [legacy, setLegacy] = useState(false);
+  const [touring, setTouring] = useState(false);
+
   const load = useCallback(async (bbox: string, zoom: number, statuses: Set<StatusCode>) => {
     const id = ++requestId.current;
     setLoading(true);
     try {
-      const params = new URLSearchParams({ bbox, zoom: zoom.toFixed(2) });
+      // Omitting bbox and zoom is the server's "give me the working set"
+      // contract, which is exactly the old behaviour.
+      const params = legacy
+        ? new URLSearchParams()
+        : new URLSearchParams({ bbox, zoom: zoom.toFixed(2) });
       if (statuses.size < ALL_STATUSES.length) {
         params.set('status', [...statuses].map((s) => STATUS_PARAM[s]).join(','));
       }
@@ -125,7 +143,7 @@ export function DepotMapScreen({
     } finally {
       if (id === requestId.current) setLoading(false);
     }
-  }, []);
+  }, [legacy]);
 
   /**
    * The first viewport is not a gesture, so nothing would request it. Read the
@@ -301,6 +319,29 @@ export function DepotMapScreen({
             style={styles.floatingButton}
           >
             <Feather name="chevron-left" size={22} color={colors.text} />
+          </Pressable>
+          {/* Perf comparison controls. Both modes ship so the numbers can be
+              re-run on the same binary rather than quoted from two builds. */}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={legacy ? 'Perf mode: all stops' : 'Perf mode: viewport'}
+            onPress={() => setLegacy((v) => !v)}
+            style={styles.floatingButton}
+          >
+            <Feather name={legacy ? 'layers' : 'crop'} size={18} color={colors.text} />
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Run camera tour"
+            onPress={() => {
+              if (touring) return;
+              setTouring(true);
+              void runCameraTour(cameraRef.current, (statuses) => setSelected(new Set(statuses)))
+                .finally(() => setTouring(false));
+            }}
+            style={styles.floatingButton}
+          >
+            <Feather name={touring ? 'loader' : 'play'} size={18} color={colors.text} />
           </Pressable>
           <View style={styles.countPill}>
             {loading ? (
