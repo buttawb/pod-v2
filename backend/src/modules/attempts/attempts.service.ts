@@ -259,12 +259,17 @@ export class AttemptsService {
     });
 
     for (const photo of photos) {
-      if (photo.status !== PhotoStatus.AwaitingUpload) continue;
+      // Every declared object is checked against S3 on every call, whatever
+      // the row currently says. Skipping rows that were not `awaiting_upload`
+      // meant the database's opinion decided whether we bothered to look, and
+      // the database is exactly what is wrong when an attempt is stuck.
+      // HeadObject is cheap; a stranded evidence file is not.
+      if (photo.status === PhotoStatus.Verified) continue;
       const head = await this.s3.headObject(photo.s3Key);
       if (!head) continue; // not uploaded yet - stays awaiting
       if (this.objectAcceptable(head.sizeBytes, photo.declaredSizeBytes, head.contentType)) {
         await this.dataSource.getRepository(AttemptPhoto).update(
-          { id: photo.id, status: PhotoStatus.AwaitingUpload },
+          { id: photo.id },
           {
             status: PhotoStatus.Verified,
             sizeBytes: String(head.sizeBytes),
@@ -425,7 +430,25 @@ export class AttemptsService {
   ): boolean {
     if (sizeBytes < MIN_OBJECT_BYTES) return false;
     if (declaredSizeBytes !== null && Number(declaredSizeBytes) !== sizeBytes) return false;
-    if (contentType !== undefined && !contentType.startsWith('image/')) return false;
+
+    // An absent or empty content type is not a reason to reject evidence.
+    //
+    // This test used to be `contentType !== undefined && !startsWith('image/')`,
+    // and S3 reports an empty string, not undefined, when the stored object
+    // carries no content type. React Native's fetch derives the request's
+    // Content-Type from the blob it is given rather than the header we set,
+    // and a blob read from a file URI has no type, so every photo this app
+    // uploaded landed in S3 with ContentType "". The empty string is not
+    // undefined and does not start with "image/", so the server rejected
+    // byte-perfect evidence it had itself presigned, forever, on a metadata
+    // field it never guaranteed would survive the round trip.
+    //
+    // The signature escaped this because its check is size-only, which is why
+    // a signature verified in the same call where the photo did not.
+    //
+    // The bytes are the evidence. A declared size that matches to the byte is
+    // a far stronger statement than a header, and it is already checked above.
+    if (contentType && !contentType.startsWith('image/')) return false;
     return true;
   }
 
