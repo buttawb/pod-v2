@@ -12,7 +12,8 @@ import {
 import type { NativeSyntheticEvent } from 'react-native';
 import type { PressEventWithFeatures } from '@maplibre/maplibre-react-native';
 import { getTodayStops, type StopWithSync } from '../db/stops-repo';
-import { colors, radius, shadow, spacing } from '../ui/components';
+import { Button, SyncBadge, colors, radius, shadow, spacing, type } from '../ui/components';
+import { navigateTo } from './navigate-to';
 import {
   ATTRIBUTION,
   BASEMAP_STYLE_URL,
@@ -43,6 +44,10 @@ export function RouteMapScreen({
   const insets = useSafeAreaInsets();
   const [stops, setStops] = useState<StopWithSync[] | null>(null);
   const [following, setFollowing] = useState(true);
+  // Tapping a pin opens its detail rather than jumping straight into the stop:
+  // at route zoom the pins are small and a mis-tap should cost a glance, not a
+  // screen change.
+  const [selected, setSelected] = useState<StopWithSync | null>(null);
 
   useEffect(() => {
     void (async () => setStops(await getTodayStops()))();
@@ -66,9 +71,10 @@ export function RouteMapScreen({
   const onPress = useCallback(
     (event: NativeSyntheticEvent<PressEventWithFeatures>) => {
       const id = event.nativeEvent.features[0]?.properties?.id as string | undefined;
-      if (id) onOpenStop(id);
+      if (!id) return;
+      setSelected((stops ?? []).find((s) => s.stop_id === id) ?? null);
     },
-    [onOpenStop],
+    [stops],
   );
 
   if (!stops) {
@@ -165,7 +171,7 @@ export function RouteMapScreen({
         </View>
       </View>
 
-      {!following ? (
+      {!following && !selected ? (
         <Pressable
           accessibilityRole="button"
           onPress={() => setFollowing(true)}
@@ -174,6 +180,64 @@ export function RouteMapScreen({
           <Feather name="navigation" size={18} color={colors.primaryText} />
           <Text style={styles.recentreText}>Follow my position</Text>
         </Pressable>
+      ) : null}
+
+      {selected ? (
+        <View
+          style={[
+            styles.sheet,
+            {
+              paddingBottom: Math.max(insets.bottom, spacing.md),
+              left: insets.left + spacing.md,
+              right: insets.right + spacing.md,
+            },
+          ]}
+        >
+          <View style={styles.sheetHead}>
+            <View style={styles.sheetSeq}>
+              <Text style={styles.sheetSeqText}>{selected.seq}</Text>
+            </View>
+            <View style={styles.sheetText}>
+              <Text style={type.bodyStrong} numberOfLines={2}>
+                {selected.address}
+              </Text>
+              <Text style={type.meta}>
+                {selected.postcode}
+                {selected.removed === 1 ? '  ·  removed by dispatch' : ''}
+              </Text>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Close"
+              hitSlop={10}
+              onPress={() => setSelected(null)}
+            >
+              <Feather name="x" size={20} color={colors.textMuted} />
+            </Pressable>
+          </View>
+
+          <View style={styles.sheetActions}>
+            <View style={styles.sheetAction}>
+              <Button
+                label="Navigate"
+                icon="corner-up-right"
+                onPress={() => {
+                  if (selected.lat === null || selected.lng === null) return;
+                  void navigateTo(selected.lat, selected.lng, selected.address);
+                }}
+                disabled={selected.lat === null || selected.lng === null}
+              />
+            </View>
+            <View style={styles.sheetAction}>
+              <Button
+                label="Open stop"
+                icon="clipboard"
+                variant="secondary"
+                onPress={() => onOpenStop(selected.stop_id)}
+              />
+            </View>
+          </View>
+        </View>
       ) : null}
 
       <Text
@@ -233,6 +297,32 @@ const styles = StyleSheet.create({
     ...shadow.raised,
   },
   recentreText: { fontSize: 15, fontWeight: '600', color: colors.primaryText },
+
+  // Anchored to the bottom so the actions stay in thumb reach and the pin the
+  // driver just tapped is not hidden under the card.
+  sheet: {
+    position: 'absolute',
+    bottom: 0,
+    marginBottom: spacing.lg,
+    padding: spacing.md,
+    gap: spacing.md,
+    borderRadius: radius.xl,
+    backgroundColor: colors.background,
+    ...shadow.raised,
+  },
+  sheetHead: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md },
+  sheetSeq: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.lg,
+    backgroundColor: colors.secondary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sheetSeqText: { fontSize: 15, fontWeight: '700', color: colors.textMuted },
+  sheetText: { flex: 1, gap: 2 },
+  sheetActions: { flexDirection: 'row', gap: spacing.sm },
+  sheetAction: { flex: 1 },
 
   attribution: {
     position: 'absolute',

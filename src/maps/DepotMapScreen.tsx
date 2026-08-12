@@ -1,18 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import {
   Camera,
   GeoJSONSource,
   Layer,
   Map,
-  Marker,
   type CameraRef,
-  type GeoJSONSourceRef,
+  type MapRef,
 } from '@maplibre/maplibre-react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { apiRequest } from '../api/client';
-import { BottomBar, Button, colors, radius, shadow, spacing, type } from '../ui/components';
+import { colors, radius, shadow, spacing, type } from '../ui/components';
 import {
   ATTRIBUTION,
   BASEMAP_STYLE_URL,
@@ -25,16 +24,18 @@ import {
   STATUS_LABELS,
   StatusCode,
 } from './basemap';
-import { RENDER_MODE, RenderMode, runCameraTour, type TourStats } from './perf-harness';
 import type { NativeSyntheticEvent } from 'react-native';
-import type { PressEventWithFeatures } from '@maplibre/maplibre-react-native';
+import type { ViewStateChangeEvent } from '@maplibre/maplibre-react-native';
 
-interface DepotFeatureCollection {
+interface DepotResponse {
   type: 'FeatureCollection';
+  /** The server decides: aggregated cells when zoomed out, real stops when in. */
+  mode: 'clustered' | 'points';
+  truncated?: boolean;
   features: Array<{
     type: 'Feature';
     geometry: { type: 'Point'; coordinates: [number, number] };
-    properties: { id: string; s: StatusCode; q: number };
+    properties: { id?: string; s?: StatusCode; q?: number; point_count?: number };
   }>;
 }
 
@@ -45,47 +46,112 @@ const ALL_STATUSES: StatusCode[] = [
   StatusCode.Failed,
 ];
 
+const STATUS_PARAM: Record<StatusCode, string> = {
+  [StatusCode.Pending]: 'pending',
+  [StatusCode.Attempted]: 'attempted',
+  [StatusCode.Delivered]: 'delivered',
+  [StatusCode.Failed]: 'failed',
+};
+
+/** Panning fires continuously; only the settled viewport is worth a request. */
+const SETTLE_MS = 350;
+
+const EMPTY: DepotResponse = { type: 'FeatureCollection', mode: 'points', features: [] };
+
 /**
- * Every stop in the depot's coverage area on one map, filterable by status,
- * and interactive on a mid-range handset.
+ * The depot's coverage, loaded a viewport at a time.
  *
- * The design that makes that possible: ONE GeoJSON source handed to the
- * native side once, rendered by GPU style layers. There is no React
- * component per stop, so panning costs no JavaScript at all. Filtering
- * swaps a layer `filter` expression (a sub-kilobyte prop diff) rather than
- * re-uploading the feature collection.
+ * The whole day is thousands of stops, and a handset should never hold all of
+ * them to draw one screen. Each settled pan or zoom asks the server for just
+ * this rectangle, and the server decides the shape of the answer: zoomed out
+ * it aggregates into counted cells in Postgres, so a country-wide view costs
+ * one small response instead of every stop the depot owns; zoomed in past
+ * street level it returns real stops, capped, and says so if it had to cut.
  *
- * Two sources, not one: cluster aggregation happens at the SOURCE level,
- * before layer filters run, so filtering a clustered source would leave
- * cluster bubbles counting stops that are no longer displayed. The flat
- * source is shown only while a filter is active.
+ * Clustering therefore happens in the database rather than on the device. That
+ * is the trade: it costs a request per settled gesture, and it means a low-end
+ * phone never parses or holds a payload that grows with the fleet.
  */
 export function DepotMapScreen({ onBack }: { onBack: () => void }) {
   const insets = useSafeAreaInsets();
-  const [data, setData] = useState<DepotFeatureCollection | null>(null);
+  const [data, setData] = useState<DepotResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<Set<StatusCode>>(new Set(ALL_STATUSES));
-  const [tourStats, setTourStats] = useState<TourStats | null>(null);
   const cameraRef = useRef<CameraRef>(null);
-  const sourceRef = useRef<GeoJSONSourceRef>(null);
+  const mapRef = useRef<MapRef>(null);
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        setData(await apiRequest<DepotFeatureCollection>('/api/v2/depot/stops.geojson'));
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Could not load depot stops');
+  const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const viewport = useRef<{ bbox: string; zoom: number } | null>(null);
+  // Rising id: a slow response for an old viewport must never overwrite a
+  // newer one that already arrived.
+  const requestId = useRef(0);
+
+  const load = useCallback(async (bbox: string, zoom: number, statuses: Set<StatusCode>) => {
+    const id = ++requestId.current;
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ bbox, zoom: zoom.toFixed(2) });
+      if (statuses.size < ALL_STATUSES.length) {
+        params.set('status', [...statuses].map((s) => STATUS_PARAM[s]).join(','));
       }
-    })();
+      const response = await apiRequest<DepotResponse>(
+        `/api/v2/depot/stops.geojson?${params.toString()}`,
+      );
+      if (id !== requestId.current) return;
+      setData(response);
+      setError(null);
+    } catch (err) {
+      if (id !== requestId.current) return;
+      setError(err instanceof Error ? err.message : 'Could not load depot stops');
+    } finally {
+      if (id === requestId.current) setLoading(false);
+    }
   }, []);
 
-  const filtering = selected.size < ALL_STATUSES.length;
+  /**
+   * The first viewport is not a gesture, so nothing would request it. Read the
+   * bounds off the map once it is ready rather than assuming what they are
+   * from the initial centre and zoom, which ignores the screen's aspect.
+   */
+  const onDidFinishLoadingMap = useCallback(() => {
+    void (async () => {
+      const map = mapRef.current;
+      if (!map) return;
+      const [bounds, zoom] = await Promise.all([map.getBounds(), map.getZoom()]);
+      const [west, south, east, north] = bounds;
+      viewport.current = { bbox: `${west},${south},${east},${north}`, zoom };
+      await load(viewport.current.bbox, zoom, selected);
+    })();
+  }, [load, selected]);
 
-  // A layer filter is compiled into the native render pass; toggling it
-  // never touches the 5,000-feature payload.
-  const statusFilter = useMemo(
-    () => ['in', ['get', 's'], ['literal', [...selected]]] as never,
-    [selected],
+  const onRegionDidChange = useCallback(
+    (event: NativeSyntheticEvent<ViewStateChangeEvent>) => {
+      const { bounds, zoom } = event.nativeEvent;
+      const [west, south, east, north] = bounds;
+      viewport.current = { bbox: `${west},${south},${east},${north}`, zoom };
+
+      if (settleTimer.current) clearTimeout(settleTimer.current);
+      settleTimer.current = setTimeout(() => {
+        const current = viewport.current;
+        if (current) void load(current.bbox, current.zoom, selected);
+      }, SETTLE_MS);
+    },
+    [load, selected],
+  );
+
+  // Filtering is a server concern now, because the counts in an aggregated
+  // cell have to be counts of what passes the filter.
+  useEffect(() => {
+    const current = viewport.current;
+    if (current) void load(current.bbox, current.zoom, selected);
+  }, [selected, load]);
+
+  useEffect(
+    () => () => {
+      if (settleTimer.current) clearTimeout(settleTimer.current);
+    },
+    [],
   );
 
   const toggle = useCallback((status: StatusCode) => {
@@ -97,146 +163,66 @@ export function DepotMapScreen({ onBack }: { onBack: () => void }) {
     });
   }, []);
 
-  const onPress = useCallback(async (event: NativeSyntheticEvent<PressEventWithFeatures>) => {
-    const feature = event.nativeEvent.features[0];
-    if (!feature) return;
-    const props = feature.properties as { cluster?: boolean; cluster_id?: number } | null;
-    if (props?.cluster && props.cluster_id !== undefined) {
-      const zoom = await sourceRef.current?.getClusterExpansionZoom(props.cluster_id);
-      const [lng, lat] = (feature.geometry as GeoJSON.Point).coordinates;
-      cameraRef.current?.easeTo({ center: [lng, lat], zoom: zoom ?? 12, duration: 400 });
-    }
-  }, []);
-
-  if (error) {
-    return (
-      <View style={styles.center}>
-        <Text style={type.body}>{error}</Text>
-        <Button label="Back" variant="secondary" onPress={onBack} />
-      </View>
-    );
-  }
-
-  if (!data) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color={colors.primary} />
-        <Text style={type.small}>Loading depot stops</Text>
-      </View>
-    );
-  }
+  const collection = data ?? EMPTY;
+  const clustered = collection.mode === 'clustered';
+  const shown = clustered
+    ? collection.features.reduce((sum, f) => sum + (f.properties.point_count ?? 0), 0)
+    : collection.features.length;
 
   return (
     <View style={styles.container}>
-      <Map style={styles.map} mapStyle={BASEMAP_STYLE_URL} attribution logo={false}>
-        <Camera
-          ref={cameraRef}
-          initialViewState={{ center: DEPOT_CENTER, zoom: DEPOT_ZOOM }}
-        />
+      <Map
+        ref={mapRef}
+        style={styles.map}
+        mapStyle={BASEMAP_STYLE_URL}
+        attribution
+        logo={false}
+        onDidFinishLoadingMap={onDidFinishLoadingMap}
+        onRegionDidChange={onRegionDidChange}
+      >
+        <Camera ref={cameraRef} initialViewState={{ center: DEPOT_CENTER, zoom: DEPOT_ZOOM }} />
 
-        {RENDER_MODE === RenderMode.Markers ? (
-          // Measurement baseline only: one native view per stop. This is what
-          // the naive implementation costs, and it is why the shipped design
-          // uses style layers instead.
-          <>
-            {data.features.slice(0, MARKER_BASELINE_LIMIT).map((f) => (
-              <Marker key={f.properties.id} lngLat={f.geometry.coordinates}>
-                <View
-                  style={[styles.markerDot, { backgroundColor: STATUS_COLORS[f.properties.s] }]}
-                />
-              </Marker>
-            ))}
-          </>
-        ) : RENDER_MODE === RenderMode.Symbols ? (
-          // Middle option: GPU layer, but unclustered symbols pay for collision
-          // detection on every frame.
-          <GeoJSONSource id="stops-flat" data={data} onPress={onPress}>
-            <Layer
-              id="stops-symbols"
-              type="symbol"
-              layout={{ 'icon-image': 'marker-15', 'icon-allow-overlap': false }}
-            />
-          </GeoJSONSource>
-        ) : (
-          <>
-            {/* Shipped design: clustered source for the overview. */}
-            <GeoJSONSource
-              id="stops-clustered"
-              ref={sourceRef}
-              data={data}
-              cluster={!filtering}
-              clusterRadius={50}
-              clusterMaxZoom={14}
-              onPress={onPress}
-            >
-              <Layer
-                id="clusters"
-                type="circle"
-                filter={['has', 'point_count'] as never}
-                layout={{ visibility: filtering ? 'none' : 'visible' }}
-                paint={{
-                  'circle-color': CLUSTER_COLOR,
-                  'circle-opacity': 0.85,
-                  'circle-stroke-width': 2,
-                  'circle-stroke-color': '#FFFFFF',
-                  'circle-radius': [
-                    'step',
-                    ['get', 'point_count'],
-                    14,
-                    25,
-                    18,
-                    100,
-                    24,
-                  ] as never,
-                }}
-              />
-              <Layer
-                id="cluster-count"
-                type="symbol"
-                filter={['has', 'point_count'] as never}
-                layout={{
-                  visibility: filtering ? 'none' : 'visible',
-                  'text-field': ['get', 'point_count_abbreviated'] as never,
-                  'text-font': GLYPH_FONT,
-                  'text-size': 13,
-                  'text-allow-overlap': true,
-                }}
-                paint={{ 'text-color': '#FFFFFF' }}
-              />
-              <Layer
-                id="stops-unclustered"
-                type="circle"
-                filter={['!', ['has', 'point_count']] as never}
-                layout={{ visibility: filtering ? 'none' : 'visible' }}
-                paint={{
-                  // Circles, not icon symbols: one instanced GPU draw with no
-                  // icon-atlas lookup and no collision pass.
-                  'circle-color': STATUS_COLOR_EXPRESSION as never,
-                  'circle-radius': 5,
-                  'circle-stroke-width': 1,
-                  'circle-stroke-color': '#FFFFFF',
-                }}
-              />
-            </GeoJSONSource>
-
-            {/* Flat source, shown only while filtering, so cluster counts can
-                never disagree with what is on screen. */}
-            <GeoJSONSource id="stops-filtered-source" data={data} cluster={false} onPress={onPress}>
-              <Layer
-                id="stops-filtered"
-                type="circle"
-                filter={statusFilter}
-                layout={{ visibility: filtering ? 'visible' : 'none' }}
-                paint={{
-                  'circle-color': STATUS_COLOR_EXPRESSION as never,
-                  'circle-radius': 5,
-                  'circle-stroke-width': 1,
-                  'circle-stroke-color': '#FFFFFF',
-                }}
-              />
-            </GeoJSONSource>
-          </>
-        )}
+        {/* One source, reshaped by the server. Nothing is clustered on the
+            device, so panning costs no JavaScript beyond the fetch. */}
+        <GeoJSONSource id="depot" data={collection as never} cluster={false}>
+          <Layer
+            id="depot-cells"
+            type="circle"
+            filter={['has', 'point_count'] as never}
+            paint={{
+              'circle-color': CLUSTER_COLOR,
+              'circle-opacity': 0.85,
+              'circle-stroke-width': 2,
+              'circle-stroke-color': '#FFFFFF',
+              'circle-radius': ['step', ['get', 'point_count'], 14, 25, 18, 100, 24] as never,
+            }}
+          />
+          <Layer
+            id="depot-cell-counts"
+            type="symbol"
+            filter={['has', 'point_count'] as never}
+            layout={{
+              'text-field': ['get', 'point_count'] as never,
+              'text-font': GLYPH_FONT,
+              'text-size': 13,
+              'text-allow-overlap': true,
+            }}
+            paint={{ 'text-color': '#FFFFFF' }}
+          />
+          <Layer
+            id="depot-stops"
+            type="circle"
+            filter={['!', ['has', 'point_count']] as never}
+            paint={{
+              // Circles, not icon symbols: one instanced GPU draw, no icon
+              // atlas lookup and no collision pass.
+              'circle-color': STATUS_COLOR_EXPRESSION as never,
+              'circle-radius': 5,
+              'circle-stroke-width': 1,
+              'circle-stroke-color': '#FFFFFF',
+            }}
+          />
+        </GeoJSONSource>
       </Map>
 
       <View
@@ -260,7 +246,13 @@ export function DepotMapScreen({ onBack }: { onBack: () => void }) {
             <Feather name="chevron-left" size={22} color={colors.text} />
           </Pressable>
           <View style={styles.countPill}>
-            <Text style={styles.countText}>{data.features.length.toLocaleString()} stops</Text>
+            {loading ? (
+              <ActivityIndicator size="small" color={colors.textMuted} />
+            ) : (
+              <Text style={styles.countText}>
+                {shown.toLocaleString()} {clustered ? 'stops in view' : 'stops'}
+              </Text>
+            )}
           </View>
         </View>
 
@@ -300,51 +292,35 @@ export function DepotMapScreen({ onBack }: { onBack: () => void }) {
             );
           })}
         </ScrollView>
-      </View>
 
-      <View
-        style={[
-          styles.footer,
-          {
-            paddingBottom: Math.max(insets.bottom, spacing.sm),
-            left: insets.left + spacing.md,
-            right: insets.right + spacing.md,
-          },
-        ]}
-      >
-        <Text style={styles.meta}>{ATTRIBUTION}</Text>
-        {__DEV__ ? (
-          <Text style={styles.meta}>
-            {RENDER_MODE}
-            {tourStats ? ` · tour ${tourStats.durationMs}ms · ${tourStats.steps} steps` : ''}
-          </Text>
+        {error ? (
+          <View style={styles.notice}>
+            <Feather name="alert-circle" size={14} color={colors.alert} />
+            <Text style={styles.noticeText}>{error}</Text>
+          </View>
+        ) : collection.truncated ? (
+          <View style={styles.notice}>
+            <Feather name="zoom-in" size={14} color={colors.progress} />
+            <Text style={styles.noticeText}>Too many stops here to show them all. Zoom in.</Text>
+          </View>
         ) : null}
       </View>
 
-      {__DEV__ ? (
-        <BottomBar>
-          <Button
-            label="Run camera tour (perf)"
-            variant="secondary"
-            onPress={() => {
-              void runCameraTour(cameraRef.current, (status) => setSelected(new Set(status))).then(
-                setTourStats,
-              );
-            }}
-          />
-        </BottomBar>
-      ) : null}
+      <Text
+        style={[
+          styles.attribution,
+          { bottom: Math.max(insets.bottom, spacing.sm), left: insets.left + spacing.md },
+        ]}
+      >
+        {ATTRIBUTION}
+      </Text>
     </View>
   );
 }
 
-/** The marker baseline OOMs well before 5,000; we bisect and report where. */
-const MARKER_BASELINE_LIMIT = 1500;
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.page },
   map: { flex: 1 },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md },
 
   overlay: { position: 'absolute', gap: spacing.sm },
   topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
@@ -358,8 +334,10 @@ const styles = StyleSheet.create({
     ...shadow.raised,
   },
   countPill: {
+    minWidth: 96,
     paddingHorizontal: spacing.sm + 2,
     height: 32,
+    alignItems: 'center',
     justifyContent: 'center',
     borderRadius: radius.full,
     backgroundColor: colors.background,
@@ -384,21 +362,26 @@ const styles = StyleSheet.create({
   chipText: { fontSize: 13, fontWeight: '600', color: colors.text },
   chipTextOn: { color: '#FFFFFF' },
 
-  footer: { position: 'absolute', bottom: 0, gap: 2 },
-  meta: {
+  notice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    alignSelf: 'flex-start',
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: 6,
+    borderRadius: radius.lg,
+    backgroundColor: colors.background,
+    ...shadow.card,
+  },
+  noticeText: { fontSize: 12, fontWeight: '500', color: colors.text },
+
+  attribution: {
+    position: 'absolute',
     fontSize: 11,
     color: colors.textMuted,
     backgroundColor: 'rgba(255,255,255,0.85)',
-    alignSelf: 'flex-start',
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: radius.sm,
-  },
-  markerDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#FFFFFF',
   },
 });
