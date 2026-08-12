@@ -1,10 +1,19 @@
-import { memo, useCallback, useEffect, useState } from 'react';
-import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  FlatList,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Banner,
   Card,
+  Chip,
   EmptyState,
   PageHeader,
   ProgressBar,
@@ -18,6 +27,13 @@ import {
   type,
 } from '../ui/components';
 import { attemptBadge, secondsUntilRetry, syncBanner, type BannerState } from '../sync/badges';
+import {
+  StopFilter,
+  STOP_FILTER_LABELS,
+  STOP_FILTER_ORDER,
+  countByStopFilter,
+  matchesStopFilter,
+} from '../domain/stop-filters';
 import { syncCounts } from '../db/attempts-repo';
 import { getTodayStops, refreshTodayStops, type StopWithSync } from '../db/stops-repo';
 import { getSessionState, SessionState } from '../auth/session';
@@ -138,7 +154,16 @@ export function StopListScreen({
     visible: false,
   });
   const [refreshing, setRefreshing] = useState(false);
+  const [filter, setFilter] = useState<StopFilter>(StopFilter.All);
   const online = syncEngine.isOnline();
+
+  // Counted over the whole day, not the filtered view, so the chips answer
+  // "is there anything there" without having to be tapped.
+  const filterCounts = useMemo(() => countByStopFilter(stops), [stops]);
+  const visible = useMemo(
+    () => (filter === StopFilter.All ? stops : stops.filter((s) => matchesStopFilter(s, filter))),
+    [stops, filter],
+  );
 
   // Stable identity, so a re-render of the screen does not invalidate every
   // memoized row through a fresh renderItem closure.
@@ -200,8 +225,28 @@ export function StopListScreen({
 
       {banner.visible ? <Banner label={banner.label} tone={banner.tone} /> : null}
 
+      {/* The round is ordered by sequence, which is the order the van drives
+          and the wrong order for "what have I not done". Filtering is local:
+          every field these read is already on the row, so it works with no
+          signal, which is where a driver most needs to ask the question. */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={[styles.filters, edge]}
+        keyboardShouldPersistTaps="handled"
+      >
+        {STOP_FILTER_ORDER.map((option) => (
+          <Chip
+            key={option}
+            label={`${STOP_FILTER_LABELS[option]} ${filterCounts[option]}`}
+            selected={filter === option}
+            onPress={() => setFilter(option)}
+          />
+        ))}
+      </ScrollView>
+
       <FlatList
-        data={stops}
+        data={visible}
         keyExtractor={keyExtractor}
         contentContainerStyle={[styles.list, edge, { paddingBottom: insets.bottom + spacing.xl }]}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void onRefresh()} />}
@@ -219,11 +264,19 @@ export function StopListScreen({
           ) : null
         }
         ListEmptyComponent={
-          <EmptyState
-            icon="inbox"
-            title="No stops loaded yet"
-            body="Pull down to fetch today's route. Once loaded it stays on this phone, signal or not."
-          />
+          filter !== StopFilter.All ? (
+            <EmptyState
+              icon="filter"
+              title="Nothing under this filter"
+              body="No stop on today's round is in that state right now."
+            />
+          ) : (
+            <EmptyState
+              icon="inbox"
+              title="No stops loaded yet"
+              body="Pull down to fetch today's route. Once loaded it stays on this phone, signal or not."
+            />
+          )
         }
         renderItem={renderStop}
       />
@@ -264,6 +317,7 @@ const styles = StyleSheet.create({
   addressDone: { color: colors.textMuted },
   // A stop dispatch pulled before anyone worked it. Receded, not hidden:
   // the driver should still see it was on the round this morning.
+  filters: { gap: spacing.sm, paddingVertical: spacing.sm, alignItems: 'center' },
   rowWithdrawn: { opacity: 0.45 },
   badgeRow: { marginTop: 6 },
 });

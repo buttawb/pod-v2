@@ -245,9 +245,12 @@ function AttemptDetailsModal({
                       <View style={styles.chipOnThumb}>
                         <SyncBadge badge={{ label: chip.label, tone: chip.tone }} />
                       </View>
+                      {/* Labelled, not iconified. A pencil on a read-only
+                          evidence screen reads as "edit this", which is the
+                          one thing that must never be possible here. */}
                       {photo.kind === 'signature' ? (
                         <View style={styles.kindTag}>
-                          <Feather name="edit-3" size={11} color={colors.primaryText} />
+                          <Text style={styles.kindTagText}>Signature</Text>
                         </View>
                       ) : null}
                     </Pressable>
@@ -442,13 +445,12 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 6,
     right: 6,
-    width: 20,
-    height: 20,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
     borderRadius: radius.full,
     backgroundColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
+  kindTagText: { color: colors.primaryText, fontSize: 10, fontWeight: '700' },
 
   viewer: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   viewerImage: { width: '100%', height: '100%' },
