@@ -36,12 +36,34 @@ UPDATE stops
        updated_at = now()
  WHERE created_at < date_trunc('day', now());
 
+-- Refuse to run against anything that is not the seeded demo fixture.
+--
+-- Everything below rewrites timestamps on an append-only evidence table as the
+-- owner role, so the column grants that normally make that impossible do not
+-- apply. The previous version had no guard and no WHERE clause on the UPDATE,
+-- which meant a mistyped connection string would silently re-time every
+-- attempt in whatever database it reached.
+--
+-- The seeded fleet is the marker: a real deployment does not have a driver
+-- called EMP-TEST-001.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM drivers WHERE employee_ref = 'EMP-TEST-001') THEN
+    RAISE EXCEPTION 'Refusing to run: this is a demo fixture script and this database is not the seeded demo.';
+  END IF;
+END $$;
+
 -- 2. The work done on it, spread across the last four hours in original order.
-WITH ordered AS (
+--    Scoped to the seeded fleet, never the whole table.
+WITH demo_drivers AS (
+  SELECT id FROM drivers WHERE employee_ref LIKE 'EMP-%'
+),
+ordered AS (
   SELECT id,
          row_number() OVER (ORDER BY captured_at, id) AS n,
          count(*) OVER ()                             AS total
     FROM delivery_attempts
+   WHERE driver_id IN (SELECT id FROM demo_drivers)
 ),
 retimed AS (
   SELECT id,
