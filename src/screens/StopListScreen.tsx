@@ -11,6 +11,7 @@ import {
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { TOUCH_TARGET } from '../ui/theme';
+import { planScrollRestore } from './scroll-restore';
 
 /** Input's minHeight in ui/components. The filter button matches it exactly. */
 const INPUT_HEIGHT = 54;
@@ -63,15 +64,6 @@ const DONE_STATUSES = new Set(['delivered', 'failed']);
  * to an unrelated row.
  */
 let rememberedOffset = 0;
-
-/**
- * How many content growths we will ride before giving up on the old position.
- *
- * Generous: a 150 stop round needs a handful. The cap only exists so a
- * remembered offset that can never be reached, because the round came back
- * shorter, cannot scroll forever.
- */
-const MAX_RESTORE_STEPS = 24;
 
 /**
  * Placeholder rows for the only case that warrants them: nothing to show yet.
@@ -438,44 +430,34 @@ export function StopListScreen({
         }}
         scrollEventThrottle={64}
         onContentSizeChange={(_width, height) => {
-          // Climb back to where the driver was, one content growth at a time.
-          //
-          // A single scrollToOffset on mount does not work and looked like it
-          // did: FlatList is virtualised, so at that moment only the first
-          // handful of rows exist and the content is a few hundred pixels
-          // tall. Asking for offset 8000 gets clamped to the bottom of what
-          // has rendered, which is the top of the list, so the driver landed
-          // back at stop 1 having opened stop 96.
-          //
-          // Each scroll renders more rows, which grows the content, which
-          // fires this again. So: if the target is now reachable, take it and
-          // stop; otherwise scroll to the end of what exists and let the next
-          // growth carry us further. The attempt counter is the backstop for a
-          // remembered offset that can never be reached, which happens when the
-          // round came back shorter than it was.
+          // The decision lives in scroll-restore.ts, where a test drives the
+          // whole virtualised growth loop and asserts where it lands. This was
+          // shipped wrong twice on reasoning alone; it is not reasoned about
+          // here any more.
           if (restored.current) return;
 
-          const target = targetOffset.current;
-          if (target <= 0) {
+          const action = planScrollRestore({
+            target: targetOffset.current,
+            contentHeight: height,
+            attempts: restoreAttempts.current,
+          });
+
+          if (action.kind === 'done') {
             restored.current = true;
             return;
           }
 
-          if (height > target) {
-            listRef.current?.scrollToOffset({ offset: target, animated: false });
+          if (action.kind === 'settle') {
+            listRef.current?.scrollToOffset({ offset: action.offset, animated: false });
             // Marked done after the scroll, so the onScroll it triggers is
-            // still ignored and cannot clobber the position we just took.
+            // still suppressed and cannot clobber the position just taken.
             restored.current = true;
-            rememberedOffset = target;
+            rememberedOffset = action.offset;
             return;
           }
 
           restoreAttempts.current += 1;
-          if (restoreAttempts.current > MAX_RESTORE_STEPS) {
-            restored.current = true;
-            return;
-          }
-          listRef.current?.scrollToOffset({ offset: height, animated: false });
+          listRef.current?.scrollToOffset({ offset: action.offset, animated: false });
         }}
         keyExtractor={keyExtractor}
         contentContainerStyle={[styles.list, edge, { paddingBottom: insets.bottom + spacing.xl }]}
