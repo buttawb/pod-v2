@@ -130,6 +130,46 @@ export class OfficeService {
     };
   }
 
+  /**
+   * Attempts that arrived for a stop their driver no longer owns.
+   *
+   * These are completed deliveries with a paperwork problem, not failures:
+   * the driver was at the door before dispatch moved the stop. They used to
+   * be refused at the write path, so nobody saw them at all. The queue exists
+   * so the office finds out from us rather than from the customer.
+   *
+   * Same keyset shape as listAttempts, served by the partial index on
+   * (received_at DESC, id DESC) WHERE conflict.
+   */
+  async listConflicts(cursor: Keyset | null) {
+    const rows = (await this.dataSource.query(
+      `SELECT a.id, a.stop_id, a.outcome, a.evidence_status, a.captured_at,
+              a.received_at, a.received_at::text AS cursor_ts, a.conflict_reason,
+              s.address, s.postcode,
+              d.display_name AS driver_name,
+              owner.display_name AS current_driver_name
+       FROM delivery_attempts a
+       JOIN stops s ON s.id = a.stop_id
+       JOIN drivers d ON d.id = a.driver_id
+       LEFT JOIN drivers owner ON owner.id = s.driver_id
+       WHERE a.conflict
+         AND ($1::timestamptz IS NULL OR (a.received_at, a.id) < ($1::timestamptz, $2::uuid))
+       ORDER BY a.received_at DESC, a.id DESC
+       LIMIT ${LIST_PAGE_SIZE + 1}`,
+      [cursor?.ts ?? null, cursor?.id ?? null],
+    )) as Array<{ id: string; cursor_ts: string }>;
+
+    const hasMore = rows.length > LIST_PAGE_SIZE;
+    const page = hasMore ? rows.slice(0, LIST_PAGE_SIZE) : rows;
+    const last = page[page.length - 1];
+
+    return {
+      conflicts: page.map(({ cursor_ts: _drop, ...rest }) => rest),
+      nextCursor: last ? encodeCursor({ ts: last.cursor_ts, id: last.id }) : null,
+      hasMore,
+    };
+  }
+
   async todayStats() {
     const [row] = (await this.dataSource.query(
       `SELECT

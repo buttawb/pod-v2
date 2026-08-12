@@ -70,6 +70,16 @@ export class DeliveryAttempt {
   @Column({ name: 'gps_accuracy_m', type: 'real', nullable: true })
   gpsAccuracyM!: number | null;
 
+  /**
+   * The stop had moved to another driver by the time this arrived. Set once,
+   * at insert, and outside pod_app's UPDATE grant so nothing can clear it.
+   */
+  @Column({ type: 'boolean', default: false })
+  conflict!: boolean;
+
+  @Column({ name: 'conflict_reason', type: 'text', nullable: true })
+  conflictReason!: string | null;
+
   /** Device clock - may be days old for offline submissions. Never overwritten. */
   @Column({ name: 'captured_at', type: 'timestamptz' })
   capturedAt!: Date;

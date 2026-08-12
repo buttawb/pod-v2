@@ -39,6 +39,13 @@ export interface CreateAttemptResult {
   uploads: UploadTarget[];
   /** Present (true) when presigning failed; the attempt itself is safe and URLs can be re-requested. */
   uploadUrlsUnavailable?: boolean;
+  /**
+   * The stop moved to another driver between capture and sync. The evidence
+   * is stored and the office has it in its conflicts queue; the handset shows
+   * it so the driver is not left believing the stop is still theirs.
+   */
+  conflict?: boolean;
+  conflictReason?: string;
 }
 
 export const ATTEMPT_CREATED_EVENT = 'attempt.created';
@@ -76,11 +83,38 @@ export class AttemptsService {
 
     const stop = await this.stops.findOne({ where: { id: dto.stopId } });
     if (!stop) throw new NotFoundException('Unknown stop');
-    if (stop.driverId !== user.sub) throw new ForbiddenException('Stop belongs to another driver');
 
     const payloadHash = this.canonicalHash(dto);
     const capturedAt = new Date(dto.capturedAt);
     const clockSuspect = capturedAt.getTime() > Date.now() + CLOCK_SUSPECT_SKEW_MS;
+
+    /**
+     * A stop that has moved to another driver.
+     *
+     * This used to be a flat 403, which is right for someone reaching for
+     * work that was never theirs and wrong for the case that actually
+     * happens: dispatch reassigns a stop while the driver holding it is
+     * offline, and that driver has already delivered the parcel. Refusing
+     * their sync deletes the only record of a real delivery.
+     *
+     * The two are told apart by when the capture happened. A capture that
+     * predates the stop's last change is consistent with "this was mine when
+     * I was standing at the door", so it is accepted and flagged for the
+     * office. A capture made after the stop moved is someone recording work
+     * against a stop that was already not theirs, and that is still refused.
+     *
+     * We cannot do better than this without an assignment history table: the
+     * stop row remembers who owns it now, not who owned it at 09:14. That is
+     * a deliberate limit, and the flag is what keeps it visible rather than
+     * silently trusted.
+     */
+    let conflictReason: string | null = null;
+    if (stop.driverId !== user.sub) {
+      if (capturedAt.getTime() >= stop.updatedAt.getTime()) {
+        throw new ForbiddenException('Stop belongs to another driver');
+      }
+      conflictReason = `Stop was reassigned after this attempt was captured (captured ${capturedAt.toISOString()}, stop last changed ${stop.updatedAt.toISOString()})`;
+    }
 
     const { attempt, photos, deduplicated } = await this.dataSource.transaction(async (em) => {
       const inserted = (await em.query(
@@ -89,8 +123,9 @@ export class AttemptsService {
            outcome, signature_s3_key, signature_declared_size_bytes,
            neighbour_house_number, reason_code, note,
            lat, lng, gps_accuracy_m, captured_at, clock_suspect, app_version,
-           source, declared_photo_count, evidence_status, payload_hash
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'v2',$19,$20,$21)
+           source, declared_photo_count, evidence_status, payload_hash,
+           conflict, conflict_reason
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'v2',$19,$20,$21,$22,$23)
          ON CONFLICT (client_attempt_id) DO NOTHING
          RETURNING id`,
         [
@@ -116,6 +151,8 @@ export class AttemptsService {
           // No declared media at all -> the attempt JSON is the whole evidence.
           dto.photos?.length || dto.signature ? 'pending_media' : 'complete',
           payloadHash,
+          conflictReason !== null,
+          conflictReason,
         ],
       )) as Array<{ id: string }>;
 
@@ -199,6 +236,12 @@ export class AttemptsService {
       deduplicated,
       uploads,
       ...(uploadUrlsUnavailable ? { uploadUrlsUnavailable } : {}),
+      // Read from the stored row, not from the local variable: on a replay
+      // the insert did not happen here, and the row is the authority on
+      // whether this attempt was ever flagged.
+      ...(attempt.conflict
+        ? { conflict: true, conflictReason: attempt.conflictReason ?? undefined }
+        : {}),
     };
   }
 

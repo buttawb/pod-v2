@@ -63,6 +63,18 @@ export class OfficeController {
     return this.officeService.listAttempts(keyset, status);
   }
 
+  /**
+   * Deliveries that arrived for a stop their driver no longer owns. Real work
+   * with a paperwork problem, not failures, and the office needs to see them
+   * before the customer calls.
+   */
+  @Get('conflicts')
+  conflicts(@Query('cursor') cursor?: string) {
+    const keyset = cursor ? decodeCursor(cursor) : null;
+    if (cursor && !keyset) throw new BadRequestException('Malformed cursor');
+    return this.officeService.listConflicts(keyset);
+  }
+
   @Get('stats')
   stats() {
     return this.officeService.todayStats();
