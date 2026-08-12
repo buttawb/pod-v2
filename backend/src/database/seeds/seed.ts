@@ -147,7 +147,8 @@ async function main(): Promise<void> {
     driverIds.push(id);
     const ref = i === 0 ? TEST_DRIVER_REF : `EMP-${String(1000 + i)}`;
     await AppDataSource.query(
-      `INSERT INTO drivers (id, employee_ref, display_name, password_hash) VALUES ($1,$2,$3,$4)`,
+      `INSERT INTO drivers (id, employee_ref, display_name, password_hash, email)
+       VALUES ($1,$2,$3,$4, lower($2) || '@fleet.local')`,
       [id, ref, i === 0 ? 'Test Driver' : `Driver ${1000 + i}`, passwordHash],
     );
   }

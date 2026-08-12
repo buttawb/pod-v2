@@ -18,10 +18,10 @@ export const envValidationSchema = Joi.object({
   JWT_ACCESS_TTL_SEC: Joi.number().integer().default(604800), // 7 days
   REFRESH_TTL_DAYS: Joi.number().integer().default(90),
 
-  // Pinned separately from the v2 values above, on purpose. Tuning v2's
-  // lifetimes must never shorten the window for handsets that cannot be
-  // updated. v1 has no refresh protocol, so this is the whole session.
-  LEGACY_ACCESS_TTL_SEC: Joi.number().integer().default(604800), // 7 days
+  // Frozen by the v1.4.2 contract at 24h with no refresh: v1 drivers
+  // re-authenticate daily. Pinned separately from the v2 values above so that
+  // tuning ours can never move a number the old fleet depends on.
+  LEGACY_ACCESS_TTL_SEC: Joi.number().integer().default(86400),
 
   AWS_REGION: Joi.string().default('ap-southeast-1'),
   S3_BUCKET: Joi.string().required(),

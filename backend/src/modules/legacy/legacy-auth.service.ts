@@ -32,19 +32,24 @@ export class LegacyAuthService {
     private readonly config: ConfigService,
   ) {}
 
-  async login(employeeRef: string, password: string): Promise<{ token: string; expiresIn: number }> {
-    const driver = await this.drivers.findOne({ where: { employeeRef, isActive: true } });
+  async login(email: string, password: string): Promise<{ token: string }> {
+    const driver = await this.drivers
+      .createQueryBuilder('d')
+      .where('lower(d.email) = lower(:email)', { email })
+      .andWhere('d.is_active = true')
+      .getOne();
     if (!driver || !(await compare(password, driver.passwordHash))) {
       // Same error for unknown ref and bad password: no account enumeration.
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const expiresIn = this.config.get<number>('LEGACY_ACCESS_TTL_SEC', 604800);
     const token = await this.jwtService.signAsync(
       { sub: driver.id, role: 'driver', aud: Audience.Legacy },
-      { expiresIn },
+      { expiresIn: this.config.get<number>('LEGACY_ACCESS_TTL_SEC', 86400) },
     );
 
-    return { token, expiresIn };
+    // Exactly one key. v1.4.2 parses this body, so anything extra is surface
+    // we could never remove again.
+    return { token };
   }
 }

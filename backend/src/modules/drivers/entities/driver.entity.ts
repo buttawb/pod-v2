@@ -15,6 +15,10 @@ export class Driver {
   @Column({ name: 'display_name', type: 'text' })
   displayName!: string;
 
+  /** How v1.4.2 signs in. Derived from employee_ref; see migration 0006. */
+  @Column({ type: 'text', nullable: true })
+  email!: string | null;
+
   @Column({ name: 'password_hash', type: 'text' })
   passwordHash!: string;
 

@@ -26,6 +26,6 @@ export class LegacyAuthController {
   @Public()
   @Post('login')
   login(@Body() dto: LegacyLoginDto) {
-    return this.legacyAuth.login(dto.employeeRef, dto.password);
+    return this.legacyAuth.login(dto.email, dto.password);
   }
 }

@@ -1,4 +1,9 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'node:crypto';
@@ -85,6 +90,15 @@ export class LegacyService {
     const stop = await this.stops.findOne({ where: { id: stopId } });
     if (!stop) throw new NotFoundException('Unknown stop');
     if (stop.driverId !== user.sub) throw new ForbiddenException('Stop belongs to another driver');
+
+    // A stop can hold exactly one pod (pods.stop_id is UNIQUE in the v1
+    // baseline), so v1.4.2 answers a second submission with 409 and shows a
+    // generic error. We match that even though our own write path further down
+    // is idempotent and would happily absorb it: the frozen behaviour is what
+    // the handset was built against, and quietly returning 201 would tell it a
+    // second POD exists when the schema cannot hold one.
+    const existing = await this.pods.findOne({ where: { stopId } });
+    if (existing) throw new ConflictException('A POD already exists for this stop');
 
     // v1 has one boolean where v2 has six outcomes, so the mapping is driven
     // by the evidence v1 actually supplied rather than assuming the richest

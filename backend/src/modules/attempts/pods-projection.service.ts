@@ -87,8 +87,14 @@ export class PodsProjectionService {
          photo_url = EXCLUDED.photo_url,
          signature_url = EXCLUDED.signature_url,
          location = EXCLUDED.location,
-         note = EXCLUDED.note,
-         created_at = EXCLUDED.created_at`,
+         note = EXCLUDED.note`,
+      // created_at is deliberately NOT updated. The row's content tracks the
+      // latest attempt, but its identity does not: v1.4.2 reads id and
+      // created_at off the POST response and may have stored them. Re-writing
+      // created_at on a later attempt silently changes the moment a POD the
+      // client already holds came into existence, and the original is then
+      // unrecoverable. The projection may restate what happened; it may not
+      // restate when v1 was told it happened.
       [
         stopId,
         delivered,
