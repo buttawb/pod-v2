@@ -12,8 +12,11 @@ export const envValidationSchema = Joi.object({
   DATABASE_URL: Joi.string().uri({ scheme: ['postgres', 'postgresql'] }).required(),
 
   JWT_SECRET: Joi.string().min(32).required(),
-  JWT_ACCESS_TTL_SEC: Joi.number().integer().default(900), // 15 min
-  REFRESH_TTL_DAYS: Joi.number().integer().default(14),
+  // The unit here is a driver's working week, not a browser session: the
+  // handset spends days out of signal and a sign-in prompt at a doorstep costs
+  // a delivery. DECISIONS.md records the revocation trade-off this accepts.
+  JWT_ACCESS_TTL_SEC: Joi.number().integer().default(604800), // 7 days
+  REFRESH_TTL_DAYS: Joi.number().integer().default(90),
 
   AWS_REGION: Joi.string().default('ap-southeast-1'),
   S3_BUCKET: Joi.string().required(),

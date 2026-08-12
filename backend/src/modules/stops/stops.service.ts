@@ -11,6 +11,20 @@ import { AttemptPhoto } from '../attempts/entities/attempt-photo.entity';
 import { DeliveryAttempt } from '../attempts/entities/delivery-attempt.entity';
 import { Stop } from './entities/stop.entity';
 
+export interface DepotBbox {
+  minLng: number;
+  minLat: number;
+  maxLng: number;
+  maxLat: number;
+}
+
+export interface DepotViewport {
+  date?: string;
+  bbox?: DepotBbox;
+  zoom?: number;
+  status?: string[];
+}
+
 /** Integer status codes keep the map payload small and `match` expressions cheap. */
 const STATUS_CODE: Record<StopStatus, number> = {
   [StopStatus.Pending]: 0,
@@ -83,31 +97,119 @@ export class StopsService {
     };
   }
 
-  async depotGeoJson(date?: string) {
+  /**
+   * Zoom at which the payload switches from aggregated cells to real stops.
+   * Below this a viewport covers a city or a country, where individual pins
+   * are unreadable anyway and only the shape of the work matters.
+   */
+  private static readonly POINT_ZOOM = 13;
+
+  /** Hard ceiling on rows returned to a handset in point mode. */
+  private static readonly MAX_POINTS = 1500;
+
+  async depotGeoJson(options: DepotViewport = {}) {
+    const { date, bbox, zoom, status } = options;
+
     // An unparseable date would otherwise surface as a Postgres cast error
     // (500); reject it at the boundary instead.
     if (date !== undefined && Number.isNaN(Date.parse(date))) {
       throw new BadRequestException('date must be an ISO date');
     }
 
-    // Bounded to one day's stops - the depot's live working set. The GiST
-    // geo index serves bbox queries if this ever needs viewport filtering.
+    // Bounded to one day's stops: the depot's live working set.
+    const day = `created_at >= date_trunc('day', COALESCE($1::timestamptz, now()))
+                 AND created_at < date_trunc('day', COALESCE($1::timestamptz, now())) + interval '1 day'
+                 AND lat IS NOT NULL`;
+
+    const params: unknown[] = [date ?? null];
+    let where = day;
+
+    if (bbox) {
+      // Served by the GiST index on point(lng, lat).
+      params.push(bbox.minLng, bbox.minLat, bbox.maxLng, bbox.maxLat);
+      where += ` AND lng BETWEEN $${params.length - 3} AND $${params.length - 1}
+                 AND lat BETWEEN $${params.length - 2} AND $${params.length}`;
+    }
+
+    if (status?.length) {
+      params.push(status);
+      where += ` AND status = ANY($${params.length}::text[])`;
+    }
+
+    // No zoom means "give me the working set", which is the original contract
+    // and what the office dashboard still asks for: a desktop renders all
+    // ~5,000 happily and clusters them itself. Aggregation is opt-in, driven by
+    // a client that has told us how far out it is looking.
+    const wantsEverything = zoom === undefined;
+    const detailed = wantsEverything || zoom >= StopsService.POINT_ZOOM;
+
+    if (!detailed) {
+      // Aggregate in the database so a country-wide view costs one small
+      // response instead of every stop the depot owns. The cell shrinks as the
+      // map zooms, which is what keeps the counts meaningful rather than one
+      // blob over the city.
+      const cell = StopsService.cellSizeDegrees(zoom);
+      params.push(cell);
+      const cellParam = `$${params.length}`;
+
+      const cells = (await this.dataSource.query(
+        `SELECT floor(lng / ${cellParam}) * ${cellParam} + ${cellParam} / 2 AS lng,
+                floor(lat / ${cellParam}) * ${cellParam} + ${cellParam} / 2 AS lat,
+                count(*)::int AS point_count
+           FROM stops
+          WHERE ${where}
+          GROUP BY 1, 2
+          ORDER BY point_count DESC
+          LIMIT 400`,
+        params,
+      )) as Array<{ lng: number; lat: number; point_count: number }>;
+
+      return {
+        type: 'FeatureCollection',
+        mode: 'clustered',
+        features: cells.map((c) => ({
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [c.lng, c.lat] },
+          properties: { point_count: c.point_count },
+        })),
+      };
+    }
+
+    let limitClause = '';
+    if (!wantsEverything) {
+      params.push(StopsService.MAX_POINTS + 1);
+      limitClause = ` LIMIT $${params.length}`;
+    }
+
     const rows = (await this.dataSource.query(
       `SELECT id, status, sequence, lat, lng
-       FROM stops
-       WHERE created_at >= date_trunc('day', COALESCE($1::timestamptz, now()))
-         AND created_at < date_trunc('day', COALESCE($1::timestamptz, now())) + interval '1 day'
-         AND lat IS NOT NULL`,
-      [date ?? null],
+         FROM stops
+        WHERE ${where}${limitClause}`,
+      params,
     )) as Array<{ id: string; status: StopStatus; sequence: number; lat: number; lng: number }>;
+
+    // A silently truncated map is a lie about coverage, so say so and let the
+    // client tell the operator to zoom in rather than trust what it sees.
+    const truncated = !wantsEverything && rows.length > StopsService.MAX_POINTS;
 
     return {
       type: 'FeatureCollection',
-      features: rows.map((r) => ({
+      mode: 'points',
+      truncated,
+      features: (wantsEverything ? rows : rows.slice(0, StopsService.MAX_POINTS)).map((r) => ({
         type: 'Feature',
         geometry: { type: 'Point', coordinates: [r.lng, r.lat] },
         properties: { id: r.id, s: STATUS_CODE[r.status] ?? 0, q: r.sequence },
       })),
     };
+  }
+
+  /**
+   * Grid cell width in degrees for a zoom level, roughly a fixed number of
+   * screen pixels: each zoom step halves the ground covered by a tile.
+   */
+  private static cellSizeDegrees(zoom?: number): number {
+    const z = Math.min(Math.max(zoom ?? 9, 0), StopsService.POINT_ZOOM);
+    return 360 / 2 ** (z + 2);
   }
 }

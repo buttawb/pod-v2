@@ -57,6 +57,49 @@ managers and killed by force-quit, the exact failure mode being defended
 against. The durable queue makes timing irrelevant, so this changes *when*
 evidence uploads, never *whether*.
 
+**Sessions are sized to a working life, not a browser tab**: a 7-day access
+token and a 90-day rotating refresh. The unit here is a driver's round, and a
+sign-in prompt on a doorstep in the rain costs a delivery. A handset can be out
+of signal for days, so a token that expires mid-round would strand a driver who
+did nothing wrong. Drivers are also the wrong people to hand a password screen
+to repeatedly: shared and rotated handsets make re-authentication a support
+call, not a tap. Long tokens are not what makes the app work offline (capture
+never checks a token; evidence hits SQLite first), they are what stops the
+*upload* stalling behind a login the driver cannot complete.
+
+The cost is honest: an access token is verified by signature alone, so it is
+not revocable, and a lost handset can write for up to seven days. Three things
+bound that. Evidence is append-only, so a stolen device can add but never
+destroy or alter. Revoking the refresh family stops renewal, capping exposure
+at the current token. And reuse of a rotated refresh token is treated as theft
+and contains the whole family automatically. If the fleet later carries higher
+risk, the lever is a shorter access token, not a different design.
+
+## Live status, without sockets
+
+The driver app holds **no live connection at all**. It POSTs attempts over
+ordinary HTTPS from a durable outbox, and every POST is idempotent. A socket on
+a handset in poor signal is a liability rather than an asset: it creates the
+illusion of delivery, and reconnect logic becomes a second, worse sync engine
+sitting alongside the real one. A queue on disk plus an idempotent POST
+survives a force-quit; an open socket does not.
+
+The live half is the office, and it uses **Server-Sent Events fed by Postgres
+`LISTEN/NOTIFY`**, not WebSockets. The feed is one-way and read-only, which is
+exactly the shape SSE is for, and it arrives with automatic reconnect and
+`Last-Event-ID` replay for free, over plain HTTP, through the same proxy and
+auth as everything else. WebSockets would buy bidirectionality nothing here
+needs, in exchange for its own upgrade path, keep-alives and reconnect code.
+
+What makes it correct rather than merely simple: the table is the source of
+truth and the notification is only a doorbell. A reconnect replays from
+`(received_at, id)` before switching to live events, so `LISTEN/NOTIFY`'s
+at-most-once delivery costs nothing and a dropped notification loses no
+attempt. Each instance holds one dedicated connection and fans out in process,
+so this works across instances behind the load balancer with no new
+infrastructure. Swapping in Redis later is one class, and that is the trade
+recorded for ~20 instances.
+
 ## Migration plan
 
 Expand/contract, with a flag as the rollback lever at every stage.
@@ -118,6 +161,16 @@ One `t3.small` with Postgres co-located stays flat to ~142 rps, degrades from
 rather than sheds, the right failure mode here. The brief's 3,000 drivers
 compute to ~115 rps steady state, so the fleet fits on one instance with
 headroom; the burst needs three to four. See `loadtest/results/RESULTS.md`.
+
+The reason a box that small holds a 3,000-driver fleet is that **photographs
+never touch the API**. The attempt POST carries a manifest (index, kind, size,
+checksum) and gets back presigned PUT URLs; the handset uploads bytes straight
+to S3, and the server later confirms each object with a `HeadObject`. So the
+API only ever moves small JSON, and the traffic that actually scales with the
+fleet, hundreds of gigabytes of images a day, is carried by object storage that
+is built for it. Proxying that through Node would have made bandwidth, not
+Postgres, the first thing to fall over, and would have put a slow rural upload
+in the way of a request thread.
 
 The depot map ships three render modes behind an env flag (per-stop markers,
 unclustered symbols, clustered GPU layers) plus a scripted camera tour, so

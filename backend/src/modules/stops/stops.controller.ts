@@ -10,7 +10,7 @@ import {
 import { CurrentUser } from '../../common/auth/current-user.decorator';
 import { Roles } from '../../common/auth/jwt-auth.guard';
 import type { JwtPayload } from '../../common/auth/jwt-payload';
-import { StopsService } from './stops.service';
+import { StopsService, type DepotBbox } from './stops.service';
 
 @Roles('driver')
 @Controller({ path: 'stops', version: '2' })
@@ -51,10 +51,45 @@ export class DepotController {
    * already have per-attempt access, may request any date.
    */
   @Get('stops.geojson')
-  depotGeoJson(@CurrentUser() user: JwtPayload, @Query('date') date?: string) {
+  depotGeoJson(
+    @CurrentUser() user: JwtPayload,
+    @Query('date') date?: string,
+    @Query('bbox') bbox?: string,
+    @Query('zoom') zoom?: string,
+    @Query('status') status?: string,
+  ) {
     if (date !== undefined && user.role !== 'office') {
       throw new ForbiddenException('Drivers may only load the current depot map');
     }
-    return this.stopsService.depotGeoJson(date);
+    return this.stopsService.depotGeoJson({
+      date,
+      bbox: parseBbox(bbox),
+      zoom: parseZoom(zoom),
+      status: status ? status.split(',').filter(Boolean) : undefined,
+    });
   }
+}
+
+/** `minLng,minLat,maxLng,maxLat`. Rejected rather than ignored when malformed:
+ *  a silently dropped bbox would answer with the whole depot. */
+function parseBbox(raw?: string): DepotBbox | undefined {
+  if (!raw) return undefined;
+  const parts = raw.split(',').map(Number);
+  if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n))) {
+    throw new BadRequestException('bbox must be minLng,minLat,maxLng,maxLat');
+  }
+  const [minLng, minLat, maxLng, maxLat] = parts;
+  if (minLng > maxLng || minLat > maxLat) {
+    throw new BadRequestException('bbox min must not exceed max');
+  }
+  return { minLng, minLat, maxLng, maxLat };
+}
+
+function parseZoom(raw?: string): number | undefined {
+  if (!raw) return undefined;
+  const zoom = Number(raw);
+  if (!Number.isFinite(zoom) || zoom < 0 || zoom > 24) {
+    throw new BadRequestException('zoom must be between 0 and 24');
+  }
+  return zoom;
 }
