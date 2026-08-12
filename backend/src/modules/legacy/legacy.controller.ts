@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Post, VERSION_NEUTRAL } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
 import { RequireAudience, Roles } from '../../common/auth/jwt-auth.guard';
 import { Audience } from '../../common/auth/jwt-payload';
@@ -15,6 +15,7 @@ import { LegacyService } from './legacy.service';
 @Roles('driver')
 @RequireAudience(Audience.Legacy)
 @ApiTags('v1 (frozen)')
+@ApiBearerAuth('driver-or-office')
 @Controller({ path: 'stops', version: VERSION_NEUTRAL })
 export class LegacyController {
   constructor(private readonly legacyService: LegacyService) {}

@@ -1,5 +1,5 @@
 import { Body, Controller, Post } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
 import { Roles } from '../../common/auth/jwt-auth.guard';
 import type { JwtPayload } from '../../common/auth/jwt-payload';
@@ -16,6 +16,7 @@ import { LegalService } from './legal.service';
  */
 @Roles('office')
 @ApiTags('legal')
+@ApiBearerAuth('driver-or-office')
 @Controller({ path: 'legal', version: '2' })
 export class ErasureController {
   constructor(private readonly legal: LegalService) {}

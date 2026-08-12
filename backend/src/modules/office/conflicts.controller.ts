@@ -1,5 +1,5 @@
 import { BadRequestException, Controller, Get, Query } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Roles } from '../../common/auth/jwt-auth.guard';
 import { decodeCursor } from '../../common/pagination/cursor';
 import { OfficeService } from './office.service';
@@ -19,6 +19,7 @@ import { OfficeService } from './office.service';
  */
 @Roles('office')
 @ApiTags('office')
+@ApiBearerAuth('driver-or-office')
 @Controller({ path: 'conflicts', version: '2' })
 export class ConflictsController {
   constructor(private readonly officeService: OfficeService) {}

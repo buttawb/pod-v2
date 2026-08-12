@@ -7,7 +7,7 @@ import {
   ParseUUIDPipe,
   Query,
 } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
 import { Roles } from '../../common/auth/jwt-auth.guard';
 import type { JwtPayload } from '../../common/auth/jwt-payload';
@@ -15,6 +15,7 @@ import { StopsService, type DepotBbox } from './stops.service';
 
 @Roles('driver')
 @ApiTags('stops')
+@ApiBearerAuth('driver-or-office')
 @Controller({ path: 'stops', version: '2' })
 export class StopsController {
   constructor(private readonly stopsService: StopsService) {}
@@ -36,6 +37,7 @@ export class StopsController {
 
 @Roles('driver', 'office')
 @ApiTags('stops')
+@ApiBearerAuth('driver-or-office')
 @Controller({ path: 'depot', version: '2' })
 export class DepotController {
   constructor(private readonly stopsService: StopsService) {}

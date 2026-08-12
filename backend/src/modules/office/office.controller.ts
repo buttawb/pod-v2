@@ -14,7 +14,7 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { Observable } from 'rxjs';
-import { ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
 import { AllowQueryToken, Roles } from '../../common/auth/jwt-auth.guard';
 import type { JwtPayload } from '../../common/auth/jwt-payload';
@@ -25,6 +25,7 @@ import { OfficeService } from './office.service';
 
 @Roles('office')
 @ApiTags('office')
+@ApiBearerAuth('driver-or-office')
 @Controller({ path: 'office', version: '2' })
 export class OfficeController {
   constructor(

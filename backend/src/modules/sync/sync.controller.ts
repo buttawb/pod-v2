@@ -1,4 +1,5 @@
 import { BadRequestException, Controller, Get, Query } from '@nestjs/common';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { CurrentUser } from '../../common/auth/current-user.decorator';
@@ -43,6 +44,8 @@ const EPOCH: TableCursor = {
  * row would be a bug, and the lag window prevents that.
  */
 @Roles('driver')
+@ApiTags('sync')
+@ApiBearerAuth('driver-or-office')
 @Controller({ path: 'sync', version: '2' })
 export class SyncController {
   constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
