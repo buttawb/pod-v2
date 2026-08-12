@@ -154,6 +154,11 @@ export function StopListScreen({
                       />
                     </View>
                   ) : null}
+                  {item.has_unfinished_draft === 1 ? (
+                    <View style={styles.badgeRow}>
+                      <SyncBadge badge={{ label: 'Unfinished attempt', tone: 'progress' }} />
+                    </View>
+                  ) : null}
                 </View>
 
                 <Feather name="chevron-right" size={20} color={colors.textSubtle} />

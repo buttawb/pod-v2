@@ -21,7 +21,9 @@ import {
 import { attemptBadge } from '../sync/badges';
 import { getStop, type StopRow } from '../db/stops-repo';
 import { getDatabase } from '../db/schema';
-import { retryNow } from '../db/attempts-repo';
+import { getDraftForStop, getPhotos, retryNow } from '../db/attempts-repo';
+import { isSubstantiveDraft } from '../sync/drafts';
+import { getSession } from '../auth/session';
 import { syncEngine } from '../sync/sync-engine';
 import { SyncState } from '../sync/state-machine';
 import { OUTCOME_SPECS, type Outcome } from '../domain/outcomes';
@@ -50,6 +52,7 @@ export function StopDetailScreen({
   const edge = useEdgePadding();
   const [stop, setStop] = useState<StopRow | null>(null);
   const [attempts, setAttempts] = useState<AttemptSummary[]>([]);
+  const [hasDraft, setHasDraft] = useState(false);
   const gate = useVersionGate();
 
   const load = useCallback(async () => {
@@ -67,6 +70,12 @@ export function StopDetailScreen({
          ORDER BY a.attempt_no DESC`,
         stopId,
       ),
+    );
+
+    const session = await getSession();
+    const draft = session ? await getDraftForStop(stopId, session.driverId) : null;
+    setHasDraft(
+      draft ? isSubstantiveDraft(draft, await getPhotos(draft.client_attempt_id)) : false,
     );
   }, [stopId]);
 
@@ -86,6 +95,10 @@ export function StopDetailScreen({
           label="Removed by dispatch. Evidence you already captured still uploads."
           tone="progress"
         />
+      ) : null}
+
+      {hasDraft ? (
+        <Banner label="You have an unfinished attempt at this stop." tone="progress" />
       ) : null}
 
       <ScrollView contentContainerStyle={[styles.content, edge]}>
@@ -169,7 +182,12 @@ export function StopDetailScreen({
             </Text>
           </View>
         ) : null}
-        <Button label="Record attempt" icon="plus" onPress={onCapture} disabled={captureBlocked} />
+        <Button
+          label={hasDraft ? 'Resume attempt' : 'Record attempt'}
+          icon={hasDraft ? 'edit-3' : 'plus'}
+          onPress={onCapture}
+          disabled={captureBlocked}
+        />
       </BottomBar>
     </Screen>
   );

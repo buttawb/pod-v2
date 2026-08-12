@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, AppState, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import {
   BottomBar,
@@ -31,11 +31,13 @@ import {
   addPhoto,
   createDraft,
   finalizeAttempt,
+  getDraftForStop,
   getPhotos,
   removePhoto,
   updateDraft,
   type PhotoRow,
 } from '../db/attempts-repo';
+import { hydrateDraft } from '../sync/drafts';
 import { capturePhoto, deleteFile, freeSpaceBytes, getCurrentFix, saveSignature } from '../capture/media';
 import { syncEngine } from '../sync/sync-engine';
 import { SignaturePad } from '../capture/SignaturePad';
@@ -45,6 +47,12 @@ import { APP_VERSION } from '../config';
 
 const LOW_STORAGE_BYTES = 500 * 1024 * 1024;
 const SIGNATURE_INDEX = 100;
+
+/**
+ * Long enough that typing is not a commit per keystroke, short enough that a
+ * force-quit costs at most a word. The AppState flush covers the window.
+ */
+const DRAFT_SAVE_DEBOUNCE_MS = 600;
 
 /** One glyph per outcome so the tile is recognisable before it is read. */
 const OUTCOME_ICONS: Record<OutcomeValue, keyof typeof Feather.glyphMap> = {
@@ -70,18 +78,45 @@ export function CaptureScreen({ stopId, onDone }: { stopId: string; onDone: () =
   const [showSignature, setShowSignature] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     void (async () => {
       const session = await getSession();
       if (!session) return;
-      const id = await createDraft({
-        stopId,
-        driverId: session.driverId,
-        deviceId: 'device',
-        appVersion: APP_VERSION,
-      });
-      setDraftId(id);
+
+      // Resume before creating. A force-quit mid-capture leaves the row and
+      // its photo files on disk untouched; minting a fresh draft here is what
+      // made that work unreachable while it sat there.
+      const existing = await getDraftForStop(stopId, session.driverId);
+      if (existing) {
+        const snapshot = hydrateDraft(existing, await getPhotos(existing.client_attempt_id));
+        setDraftId(snapshot.clientAttemptId);
+        // An outcome this build no longer knows about must not be silently
+        // re-selected: it would drive the wrong evidence rules.
+        setOutcome(
+          snapshot.outcome && snapshot.outcome in OUTCOME_SPECS
+            ? (snapshot.outcome as OutcomeValue)
+            : null,
+        );
+        setReasonCode(snapshot.reasonCode);
+        setHouseNumber(snapshot.neighbourHouseNumber);
+        setNote(snapshot.note);
+        setBarcode(snapshot.parcelBarcode);
+        setBarcodeSource(snapshot.barcodeSource);
+        setSignaturePath(snapshot.signaturePath);
+        setPhotos(snapshot.photos);
+      } else {
+        setDraftId(
+          await createDraft({
+            stopId,
+            driverId: session.driverId,
+            deviceId: 'device',
+            appVersion: APP_VERSION,
+          }),
+        );
+      }
+      setHydrated(true);
 
       if (freeSpaceBytes() < LOW_STORAGE_BYTES) {
         Alert.alert('Storage is low', 'Free some space soon so evidence can still be saved.');
@@ -120,6 +155,45 @@ export function CaptureScreen({ stopId, onDone }: { stopId: string; onDone: () =
       neighbourHouseNumber: houseNumber.trim() || null,
     });
   }, [outcome, signaturePath, photoCount, reasonCode, houseNumber]);
+
+  const draftFields = useMemo(
+    () => ({
+      outcome,
+      reason_code: reasonCode,
+      neighbour_house_number: houseNumber.trim() || null,
+      note: note.trim() || null,
+      parcel_barcode: barcode.trim() || null,
+      barcode_source: barcode.trim() ? barcodeSource : null,
+    }),
+    [outcome, reasonCode, houseNumber, note, barcode, barcodeSource],
+  );
+
+  // Read outside the render cycle by the background flush, which would
+  // otherwise capture whatever the closure held when the listener was bound.
+  const latestFields = useRef(draftFields);
+  latestFields.current = draftFields;
+
+  const flushDraft = useCallback(async () => {
+    // The `hydrated` gate is what stops the first empty render from
+    // overwriting the draft that was just restored into it.
+    if (!draftId || !hydrated) return;
+    await updateDraft(draftId, latestFields.current);
+  }, [draftId, hydrated]);
+
+  useEffect(() => {
+    if (!draftId || !hydrated) return;
+    const timer = setTimeout(() => void flushDraft(), DRAFT_SAVE_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [draftFields, draftId, hydrated, flushDraft]);
+
+  useEffect(() => {
+    // A force-quit is preceded by a background transition on both platforms,
+    // so this is the last reliable moment to get the debounce window down.
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') void flushDraft();
+    });
+    return () => subscription.remove();
+  }, [flushDraft]);
 
   const onTakePhoto = async () => {
     if (!draftId) return;

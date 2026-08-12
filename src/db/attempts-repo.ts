@@ -59,8 +59,10 @@ export async function createDraft(input: {
   const db = getDatabase();
   const clientAttemptId = Crypto.randomUUID();
 
+  // Drafts are not attempts. Counting them numbers the driver's first real
+  // attempt "3" after two capture screens that were opened and abandoned.
   const prior = await db.getFirstAsync<{ n: number }>(
-    'SELECT count(*) AS n FROM attempts WHERE stop_id = ?',
+    `SELECT count(*) AS n FROM attempts WHERE stop_id = ? AND sync_state <> 'draft'`,
     input.stopId,
   );
 
@@ -91,6 +93,28 @@ export async function getPhotos(clientAttemptId: string): Promise<PhotoRow[]> {
   return getDatabase().getAllAsync<PhotoRow>(
     'SELECT * FROM attempt_photos WHERE client_attempt_id = ? ORDER BY photo_index',
     clientAttemptId,
+  );
+}
+
+/**
+ * The unfinished capture to resume at this stop, if there is one.
+ *
+ * Scoped by driver because handsets are shared and `updateDraft` never
+ * rewrites `driver_id`: without this, driver B opening the stop would inherit
+ * driver A's half-finished capture and submit it under A's name from B's
+ * session. Newest first, since that is the one the driver last had open.
+ */
+export async function getDraftForStop(
+  stopId: string,
+  driverId: string,
+): Promise<AttemptRow | null> {
+  return getDatabase().getFirstAsync<AttemptRow>(
+    `SELECT * FROM attempts
+     WHERE stop_id = ? AND driver_id = ? AND sync_state = 'draft'
+     ORDER BY captured_at DESC
+     LIMIT 1`,
+    stopId,
+    driverId,
   );
 }
 

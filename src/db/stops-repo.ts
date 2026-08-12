@@ -2,6 +2,7 @@ import { apiRequest } from '../api/client';
 import { syncEngine } from '../sync/sync-engine';
 import { getDatabase, setMeta } from './schema';
 import { SyncState } from '../sync/state-machine';
+import { SUBSTANTIVE_DRAFT_SQL } from '../sync/drafts';
 
 export interface StopRow {
   stop_id: string;
@@ -19,6 +20,7 @@ export interface StopRow {
 export interface StopWithSync extends StopRow {
   attempt_count: number;
   worst_sync_state: SyncState | null;
+  has_unfinished_draft: number;
 }
 
 interface ServerStop {
@@ -53,7 +55,15 @@ export async function getTodayStops(): Promise<StopWithSync[]> {
                 WHEN 'attempt_acked' THEN 4
                 WHEN 'queued' THEN 3
                 ELSE 1 END DESC
-              LIMIT 1) AS worst_sync_state
+              LIMIT 1) AS worst_sync_state,
+            -- Scoped to the signed-in driver via sync_meta so the signature
+            -- stays argument-free: on a shared handset a marker must never
+            -- invite driver B into driver A's unfinished capture.
+            EXISTS (SELECT 1 FROM attempts a
+                     WHERE a.stop_id = s.stop_id
+                       AND a.sync_state = 'draft'
+                       AND a.driver_id = (SELECT value FROM sync_meta WHERE key = 'driver_id')
+                       AND ${SUBSTANTIVE_DRAFT_SQL}) AS has_unfinished_draft
      FROM stops s
      WHERE s.route_date = ?
      ORDER BY s.removed ASC, s.seq ASC`,
