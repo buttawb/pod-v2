@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   Pressable,
@@ -15,6 +15,7 @@ import {
   Card,
   Chip,
   EmptyState,
+  Input,
   PageHeader,
   ProgressBar,
   Screen,
@@ -33,6 +34,7 @@ import {
   STOP_FILTER_ORDER,
   countByStopFilter,
   matchesStopFilter,
+  matchesStopSearch,
 } from '../domain/stop-filters';
 import { syncCounts } from '../db/attempts-repo';
 import { getTodayStops, refreshTodayStops, type StopWithSync } from '../db/stops-repo';
@@ -41,6 +43,22 @@ import { syncEngine } from '../sync/sync-engine';
 import { SyncState } from '../sync/state-machine';
 
 const DONE_STATUSES = new Set(['delivered', 'failed']);
+
+/**
+ * Where the driver was in the round, remembered across navigation.
+ *
+ * Opening stop 96 and coming back used to land at the top of the list, so the
+ * driver scrolled through ninety-five rows they had already dealt with to get
+ * back to where they were standing. The screen unmounts on navigation, so the
+ * offset cannot live in its state; it is deliberately module scope rather than
+ * something persisted, because it is a position in this session's list, not a
+ * fact about the round.
+ *
+ * Reset whenever the visible set changes: an offset measured against one list
+ * means nothing against a shorter filtered one, and restoring it would scroll
+ * to an unrelated row.
+ */
+let rememberedOffset = 0;
 
 /**
  * One stop, memoized.
@@ -155,14 +173,25 @@ export function StopListScreen({
   });
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<StopFilter>(StopFilter.All);
+  const [query, setQuery] = useState('');
+
+  const narrow = useCallback((next: StopFilter | null, text: string | null) => {
+    // A remembered offset belongs to the list it was measured on.
+    rememberedOffset = 0;
+    if (next !== null) setFilter(next);
+    if (text !== null) setQuery(text);
+  }, []);
   const online = syncEngine.isOnline();
+  const listRef = useRef<FlatList<StopWithSync>>(null);
+  const restored = useRef(false);
 
   // Counted over the whole day, not the filtered view, so the chips answer
   // "is there anything there" without having to be tapped.
   const filterCounts = useMemo(() => countByStopFilter(stops), [stops]);
   const visible = useMemo(
-    () => (filter === StopFilter.All ? stops : stops.filter((s) => matchesStopFilter(s, filter))),
-    [stops, filter],
+    () =>
+      stops.filter((s) => matchesStopFilter(s, filter) && matchesStopSearch(s, query)),
+    [stops, filter, query],
   );
 
   // Stable identity, so a re-render of the screen does not invalidate every
@@ -225,6 +254,17 @@ export function StopListScreen({
 
       {banner.visible ? <Banner label={banner.label} tone={banner.tone} /> : null}
 
+      <View style={[styles.search, edge]}>
+        <Input
+          value={query}
+          onChangeText={(text) => narrow(null, text)}
+          placeholder="Search address or postcode"
+          autoCapitalize="none"
+          autoCorrect={false}
+          clearButtonMode="while-editing"
+        />
+      </View>
+
       {/* The round is ordered by sequence, which is the order the van drives
           and the wrong order for "what have I not done". Filtering is local:
           every field these read is already on the row, so it works with no
@@ -240,13 +280,25 @@ export function StopListScreen({
             key={option}
             label={`${STOP_FILTER_LABELS[option]} ${filterCounts[option]}`}
             selected={filter === option}
-            onPress={() => setFilter(option)}
+            onPress={() => narrow(option, null)}
           />
         ))}
       </ScrollView>
 
       <FlatList
+        ref={listRef}
         data={visible}
+        onScroll={(event) => {
+          rememberedOffset = event.nativeEvent.contentOffset.y;
+        }}
+        scrollEventThrottle={64}
+        onContentSizeChange={() => {
+          // Restore once, after the rows exist. Scrolling before layout is a
+          // no-op, which is why this cannot happen on mount.
+          if (restored.current || rememberedOffset <= 0) return;
+          restored.current = true;
+          listRef.current?.scrollToOffset({ offset: rememberedOffset, animated: false });
+        }}
         keyExtractor={keyExtractor}
         contentContainerStyle={[styles.list, edge, { paddingBottom: insets.bottom + spacing.xl }]}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void onRefresh()} />}
@@ -317,6 +369,7 @@ const styles = StyleSheet.create({
   addressDone: { color: colors.textMuted },
   // A stop dispatch pulled before anyone worked it. Receded, not hidden:
   // the driver should still see it was on the round this morning.
+  search: { paddingTop: spacing.sm },
   filters: { gap: spacing.sm, paddingVertical: spacing.sm, alignItems: 'center' },
   rowWithdrawn: { opacity: 0.45 },
   badgeRow: { marginTop: 6 },

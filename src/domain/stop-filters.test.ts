@@ -4,6 +4,7 @@ import {
   STOP_FILTER_ORDER,
   countByStopFilter,
   matchesStopFilter,
+  matchesStopSearch,
   type FilterableStop,
 } from './stop-filters';
 
@@ -88,5 +89,38 @@ describe('stop filters', () => {
       expect(matchesStopFilter(stop(), filter)).toBeDefined();
     }
     expect(STOP_FILTER_ORDER[0]).toBe(StopFilter.All);
+  });
+});
+
+describe('stop search', () => {
+  const target = { address: '27 Mill Lane', postcode: 'RM6 5DH' };
+
+  it('shows the whole round when nothing is typed', () => {
+    // A search box that empties the list until something is typed is worse
+    // than no search box.
+    expect(matchesStopSearch(target, '')).toBe(true);
+    expect(matchesStopSearch(target, '   ')).toBe(true);
+  });
+
+  it('finds a stop by house number or street', () => {
+    expect(matchesStopSearch(target, 'mill')).toBe(true);
+    expect(matchesStopSearch(target, '27')).toBe(true);
+    expect(matchesStopSearch(target, 'MILL LANE')).toBe(true);
+  });
+
+  it('finds a postcode however it was typed', () => {
+    // Written "RM6 5DH" on the label, typed one-handed in a van.
+    expect(matchesStopSearch(target, 'rm6 5dh')).toBe(true);
+    expect(matchesStopSearch(target, 'rm65dh')).toBe(true);
+    expect(matchesStopSearch(target, 'RM6')).toBe(true);
+  });
+
+  it('narrows on every term rather than widening', () => {
+    expect(matchesStopSearch(target, 'mill 5dh')).toBe(true);
+    expect(matchesStopSearch(target, 'mill e14')).toBe(false);
+  });
+
+  it('does not match a stop that has nothing to do with the query', () => {
+    expect(matchesStopSearch(target, 'station')).toBe(false);
   });
 });

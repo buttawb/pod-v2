@@ -60,6 +60,34 @@ export interface FilterableStop {
   has_unfinished_draft: number;
 }
 
+/** What a search looks at: the two things written on a parcel label. */
+export interface SearchableStop {
+  address: string;
+  postcode: string;
+}
+
+/**
+ * Matches a stop against what the driver typed.
+ *
+ * Case and spacing are ignored on both sides, because a postcode is written
+ * "SW9 4LJ" on the label, typed "sw94lj" one-handed in a van, and stored with
+ * whichever spacing the round came with. Requiring them to agree would make
+ * the search look broken for the field it is most useful on.
+ *
+ * Every term has to match somewhere, so "mill 5dh" narrows rather than widens.
+ * An empty query matches everything: a search box that hides the round until
+ * something is typed is worse than no search box.
+ */
+export function matchesStopSearch(stop: SearchableStop, query: string): boolean {
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return true;
+
+  const haystack = `${stop.address} ${stop.postcode}`.toLowerCase();
+  const squashed = haystack.replace(/\s+/g, '');
+
+  return terms.every((term) => haystack.includes(term) || squashed.includes(term));
+}
+
 export function matchesStopFilter(stop: FilterableStop, filter: StopFilter): boolean {
   switch (filter) {
     case StopFilter.All:
