@@ -23,6 +23,11 @@ const TODAY_STOPS = 5000;
 const STOPS_PER_DRIVER = Math.floor(TODAY_STOPS / DRIVER_COUNT);
 const HISTORICAL_STOPS = 3000;
 
+/** A Pakistan depot: its own drivers, its own round, its own city. */
+const PK_DRIVER_COUNT = 8;
+const PK_STOPS = 320;
+const PK_TEST_DRIVER_REF = 'EMP-PK-001';
+
 // Real London outward codes with rough centroids; inward codes generated.
 // Gaussian jitter inside each district gives clustering realistic density
 // variation (dense zone 1-2, sparse outskirts).
@@ -41,6 +46,40 @@ const DISTRICTS: Array<[string, number, number]> = [
   ['SM1', 51.3618, -0.1945], ['N9', 51.6266, -0.0663], ['E6', 51.5255, 0.0517],
   ['SE28', 51.5013, 0.1207], ['SW16', 51.4218, -0.1235], ['W3', 51.5114, -0.2678],
   ['NW9', 51.5883, -0.2521],
+];
+
+/**
+ * Pakistan, as its own round rather than mixed into a London driver's day.
+ *
+ * A driver's stops have to be drivable in one shift, so scattering Karachi
+ * addresses through a London round would produce a route map spanning two
+ * continents and a "next stop" that is a six hour flight away. These belong to
+ * their own drivers out of their own depot, which is also what makes the depot
+ * map meaningful: two real clusters, not one cluster and a smear.
+ *
+ * Postcodes are Pakistan Post's five digit codes and the coordinates are the
+ * real centres of those areas, so the map is not decorative.
+ */
+const PK_DISTRICTS: Array<[string, number, number]> = [
+  // Karachi
+  ['75500', 24.8607, 67.0011], ['75300', 24.8918, 67.0281], ['75600', 24.8615, 67.0099],
+  ['74200', 24.8738, 67.0424], ['75350', 24.9200, 67.0971], ['75400', 24.8329, 67.0781],
+  ['74700', 24.9056, 67.0822], ['75950', 24.9425, 67.1147], ['75290', 24.8074, 67.0330],
+  // Lahore
+  ['54000', 31.5497, 74.3436], ['54660', 31.5204, 74.3587], ['54600', 31.4697, 74.2728],
+  ['54792', 31.4826, 74.3095], ['54810', 31.5925, 74.3095], ['54770', 31.5010, 74.3441],
+  // Islamabad and Rawalpindi
+  ['44000', 33.6844, 73.0479], ['44090', 33.7294, 73.0931], ['44050', 33.6518, 73.1560],
+  ['46000', 33.5651, 73.0169], ['46300', 33.5969, 73.0515],
+  // Faisalabad, Multan, Peshawar
+  ['38000', 31.4504, 73.1350], ['60000', 30.1575, 71.5249], ['25000', 34.0151, 71.5249],
+];
+
+const PK_STREET_NAMES = [
+  'Shahrah-e-Faisal', 'Tariq Road', 'Zamzama Boulevard', 'Khayaban-e-Shahbaz',
+  'Ferozepur Road', 'Mall Road', 'Jail Road', 'Gulberg Main Boulevard',
+  'Jinnah Avenue', 'Margalla Road', 'Peshawar Road', 'University Road',
+  'Canal Bank Road', 'Bahadurabad Chowrangi', 'Korangi Industrial Road',
 ];
 
 const STREET_NAMES = [
@@ -112,16 +151,31 @@ function dayTimestamp(fraction: number): string {
   return new Date(start.getTime() + Math.floor(fraction * WORKING_MS)).toISOString();
 }
 
-function makeStop(driverId: string, sequence: number, createdAt: string, withCoords: boolean): SeedStop {
-  const [outward, cLat, cLng] = DISTRICTS[Math.floor(rand() * DISTRICTS.length)];
+type Region = 'uk' | 'pk';
+
+function makeStop(
+  driverId: string,
+  sequence: number,
+  createdAt: string,
+  withCoords: boolean,
+  region: Region = 'uk',
+): SeedStop {
+  const pk = region === 'pk';
+  const table = pk ? PK_DISTRICTS : DISTRICTS;
+  const [outward, cLat, cLng] = table[Math.floor(rand() * table.length)];
   const lat = cLat + gaussian() * 0.008;
   const lng = cLng + gaussian() * 0.012;
   const inward = `${1 + Math.floor(rand() * 9)}${'ABDEFGHJLNPQRSTUWXYZ'[Math.floor(rand() * 20)]}${'ABDEFGHJLNPQRSTUWXYZ'[Math.floor(rand() * 20)]}`;
   return {
     id: randomUUID(),
     driverId,
-    address: `${1 + Math.floor(rand() * 240)} ${pick(STREET_NAMES)}`,
-    postcode: `${outward} ${inward}`,
+    // Pakistan Post codes are five digits with no inward part, so the UK
+    // inward suffix is not appended: a postcode a driver cannot recognise is
+    // worse than no postcode.
+    address: pk
+      ? `House ${1 + Math.floor(rand() * 400)}, ${pick(PK_STREET_NAMES)}`
+      : `${1 + Math.floor(rand() * 240)} ${pick(STREET_NAMES)}`,
+    postcode: pk ? outward : `${outward} ${inward}`,
     location: `${lat.toFixed(4)},${lng.toFixed(4)}`,
     sequence,
     createdAt,
@@ -182,6 +236,20 @@ async function main(): Promise<void> {
       [id, ref, i === 0 ? 'Test Driver' : `Driver ${1000 + i}`, passwordHash],
     );
   }
+  // The Pakistan depot's drivers. Same password as the UK test driver so there
+  // is one credential to remember when demonstrating either round.
+  const pkDriverIds: string[] = [];
+  for (let i = 0; i < PK_DRIVER_COUNT; i += 1) {
+    const id = randomUUID();
+    pkDriverIds.push(id);
+    const ref = i === 0 ? PK_TEST_DRIVER_REF : `EMP-PK-${String(100 + i)}`;
+    await AppDataSource.query(
+      `INSERT INTO drivers (id, employee_ref, display_name, password_hash, email)
+       VALUES ($1,$2,$3,$4, lower($2) || '@fleet.local')`,
+      [id, ref, i === 0 ? 'Karachi Test Driver' : `Driver PK ${100 + i}`, passwordHash],
+    );
+  }
+
   await AppDataSource.query(
     `INSERT INTO office_users (email, display_name, password_hash) VALUES ($1,$2,$3)`,
     [OFFICE_EMAIL, 'Office Demo', hashSync(OFFICE_PASSWORD, 10)],
@@ -199,6 +267,18 @@ async function main(): Promise<void> {
     }
   });
   await insertStops(today);
+
+  console.log(`Seeding ${PK_STOPS} stops for the Pakistan depot...`);
+  const pkPerDriver = Math.floor(PK_STOPS / PK_DRIVER_COUNT);
+  pkDriverIds.forEach((driverId, d) => {
+    const count = d === pkDriverIds.length - 1 ? PK_STOPS - pkPerDriver * (PK_DRIVER_COUNT - 1) : pkPerDriver;
+    for (let seq = 1; seq <= count; seq += 1) {
+      const through = (seq - 1) / Math.max(count - 1, 1);
+      today.push(
+        makeStop(driverId, seq, dayTimestamp(Math.min(through + rand() * 0.02, 1)), true, 'pk'),
+      );
+    }
+  });
 
   console.log(`Seeding ${HISTORICAL_STOPS} historical stops with legacy pods rows...`);
   const historical: SeedStop[] = [];
@@ -239,6 +319,7 @@ async function main(): Promise<void> {
   const [podCount] = (await AppDataSource.query(`SELECT count(*)::int AS n FROM pods`)) as Array<{ n: number }>;
   console.log(`Done. stops=${stopCount.n} pods=${podCount.n}`);
   console.log(`Test driver login:  ${TEST_DRIVER_REF} / ${TEST_DRIVER_PASSWORD}`);
+  console.log(`Karachi driver:     ${PK_TEST_DRIVER_REF} / ${TEST_DRIVER_PASSWORD}`);
   console.log(`Office login:       ${OFFICE_EMAIL} / ${OFFICE_PASSWORD}`);
 
   await AppDataSource.destroy();
