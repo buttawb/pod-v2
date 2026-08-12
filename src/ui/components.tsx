@@ -1,6 +1,7 @@
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
+  Keyboard,
   Pressable,
   StyleSheet,
   Text,
@@ -20,9 +21,56 @@ type IconName = keyof typeof Feather.glyphMap;
 /* Layout                                                                     */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Height of the on-screen keyboard, measured rather than inferred.
+ *
+ * The manifest asks for android:windowSoftInputMode="adjustResize" and it does
+ * nothing, because the app draws edge to edge: the window no longer shrinks
+ * when the keyboard opens, so there is no resize for anything to react to.
+ * KeyboardAvoidingView is built on that same resize and is equally inert here,
+ * which is why adding one would not have fixed the note field.
+ *
+ * The keyboard events still fire and still carry the real height, so that is
+ * what we use.
+ */
+export function useKeyboardInset(): number {
+  const [height, setHeight] = useState(0);
+
+  useEffect(() => {
+    const shown = Keyboard.addListener('keyboardDidShow', (event) =>
+      setHeight(event.endCoordinates.height),
+    );
+    const hidden = Keyboard.addListener('keyboardDidHide', () => setHeight(0));
+    return () => {
+      shown.remove();
+      hidden.remove();
+    };
+  }, []);
+
+  return height;
+}
+
 export function Screen({ children, plain }: { children: ReactNode; plain?: boolean }) {
+  const keyboard = useKeyboardInset();
+  const insets = useSafeAreaInsets();
+
+  // Lifting the whole screen fixes every form at once, and it lifts the bottom
+  // bar with the content: a Complete button hidden behind the keyboard is the
+  // same bug as a hidden text field. The keyboard height already spans the
+  // navigation bar, which BottomBar pads for separately, so that is taken off
+  // to avoid a gap.
+  const lift = keyboard > 0 ? Math.max(0, keyboard - insets.bottom) : 0;
+
   return (
-    <View style={[styles.screen, plain && { backgroundColor: colors.background }]}>{children}</View>
+    <View
+      style={[
+        styles.screen,
+        plain && { backgroundColor: colors.background },
+        lift > 0 && { paddingBottom: lift },
+      ]}
+    >
+      {children}
+    </View>
   );
 }
 

@@ -180,11 +180,41 @@ export function CaptureScreen({ stopId, onDone }: { stopId: string; onDone: () =
     await updateDraft(draftId, latestFields.current);
   }, [draftId, hydrated]);
 
+  // Typing only. The timer restarts on every keystroke, so this alone commits
+  // nothing while the driver is still working, which is the point of it and
+  // also why it cannot be the only writer.
   useEffect(() => {
     if (!draftId || !hydrated) return;
     const timer = setTimeout(() => void flushDraft(), DRAFT_SAVE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [draftFields, draftId, hydrated, flushDraft]);
+
+  /**
+   * Discrete choices are written straight away, not debounced.
+   *
+   * Picking an outcome is one tap, and the debounce above kept pushing that
+   * write further out with every character typed afterwards. Leave the screen
+   * and the timer is cleared: the outcome, the barcode and the note all go
+   * together, which is exactly what came back from the handset.
+   */
+  useEffect(() => {
+    if (!draftId || !hydrated) return;
+    void flushDraft();
+  }, [outcome, reasonCode, barcodeSource, draftId, hydrated, flushDraft]);
+
+  /**
+   * Leaving the screen commits whatever is pending.
+   *
+   * Back out of a capture within the debounce window and the cleanup used to
+   * clearTimeout and nothing else, so the work was discarded by the very code
+   * meant to preserve it. Unmount is a certainty; the background transition
+   * below is not.
+   */
+  useEffect(() => {
+    return () => {
+      void flushDraft();
+    };
+  }, [flushDraft]);
 
   useEffect(() => {
     // A force-quit is preceded by a background transition on both platforms,

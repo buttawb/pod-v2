@@ -211,8 +211,10 @@ class SyncEngine {
       neighbourHouseNumber: attempt.neighbour_house_number ?? undefined,
       reasonCode: attempt.reason_code ?? undefined,
       note: attempt.note ?? undefined,
-      lat: attempt.lat ?? 0,
-      lng: attempt.lng ?? 0,
+      // Omitted, never zeroed. `?? 0` turned "no GPS fix" into a coordinate
+      // in the Gulf of Guinea and filed it as evidence.
+      lat: attempt.lat ?? undefined,
+      lng: attempt.lng ?? undefined,
       gpsAccuracyM: attempt.gps_accuracy_m ?? undefined,
       capturedAt: attempt.captured_at,
       appVersion: attempt.app_version || APP_VERSION,
