@@ -445,3 +445,65 @@ describe('a stuck attempt never strands the queue behind it', () => {
     expect(rows.get('a2')?.sync_state).toBe(SyncState.Synced);
   });
 });
+
+/**
+ * The notification that makes a subscribed screen re-read.
+ *
+ * My Route reads the round once and then relies on this: if the engine stops
+ * notifying, a delivered stop keeps its pending pin until the screen is closed
+ * and reopened, and a driver reading that map goes back to a door they have
+ * already been to.
+ */
+describe('screens are told when the round changes', () => {
+  it('notifies subscribers after an attempt reaches the server', async () => {
+    rows.set('a1', attempt());
+    api.mockImplementation(async (path: string) => {
+      if (path === '/api/v2/attempts') {
+        return {
+          attemptId: 'srv-1',
+          clientAttemptId: 'a1',
+          evidenceStatus: 'complete',
+          deduplicated: false,
+          uploads: [],
+        };
+      }
+      return { attemptComplete: true, evidenceStatus: 'complete' };
+    });
+
+    const seen: SyncState[] = [];
+    const unsubscribe = syncEngine.subscribe(() => {
+      const row = rows.get('a1');
+      if (row) seen.push(row.sync_state);
+    });
+
+    await syncEngine.kick();
+    unsubscribe();
+
+    // At least one notification, and the state visible to a subscriber at that
+    // moment is the settled one: a screen re-reading here sees the delivery.
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen[seen.length - 1]).toBe(SyncState.Synced);
+  });
+
+  it('stops notifying once a screen unsubscribes', async () => {
+    rows.set('a1', attempt());
+    api.mockResolvedValue({ attemptComplete: true, evidenceStatus: 'complete' });
+
+    const listener = jest.fn();
+    syncEngine.subscribe(listener)();
+
+    syncEngine.announce();
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('announce reaches subscribers, which is how a route pull refreshes a screen', () => {
+    const listener = jest.fn();
+    const unsubscribe = syncEngine.subscribe(listener);
+
+    syncEngine.announce();
+    unsubscribe();
+
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+});

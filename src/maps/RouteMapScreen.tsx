@@ -12,6 +12,8 @@ import {
 import type { NativeSyntheticEvent } from 'react-native';
 import type { PressEventWithFeatures } from '@maplibre/maplibre-react-native';
 import { getTodayStops, type StopWithSync } from '../db/stops-repo';
+import { syncEngine } from '../sync/sync-engine';
+import { routeFeatureCollection } from './route-features';
 import { Button, SyncBadge, colors, radius, shadow, spacing, type } from '../ui/components';
 import { navigateTo } from './navigate-to';
 import {
@@ -49,24 +51,26 @@ export function RouteMapScreen({
   // screen change.
   const [selected, setSelected] = useState<StopWithSync | null>(null);
 
-  useEffect(() => {
-    void (async () => setStops(await getTodayStops()))();
+  const load = useCallback(async () => {
+    setStops(await getTodayStops());
   }, []);
 
+  /**
+   * Re-read whenever anything changes underneath, like every other screen.
+   *
+   * This read used to run once on mount with no subscription, so a stop the
+   * driver had just delivered kept its pending pin until the screen was left
+   * and reopened. The map was the only surface in the app quietly showing a
+   * stale round, which is the worst place for it: a driver reads a map to
+   * decide where to go next.
+   */
+  useEffect(() => {
+    void load();
+    return syncEngine.subscribe(() => void load());
+  }, [load]);
+
   // Built once per stop-list change, never per GPS tick.
-  const collection = useMemo(() => {
-    const features = (stops ?? [])
-      .filter((s) => s.lat !== null && s.lng !== null && s.removed === 0)
-      .map((s) => ({
-        type: 'Feature' as const,
-        geometry: {
-          type: 'Point' as const,
-          coordinates: [s.lng as number, s.lat as number] as [number, number],
-        },
-        properties: { id: s.stop_id, s: statusCodeFor(s.status), q: s.seq },
-      }));
-    return { type: 'FeatureCollection' as const, features };
-  }, [stops]);
+  const collection = useMemo(() => routeFeatureCollection(stops ?? []), [stops]);
 
   const onPress = useCallback(
     (event: NativeSyntheticEvent<PressEventWithFeatures>) => {
