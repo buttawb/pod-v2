@@ -45,6 +45,8 @@ interface FinalizeResponse {
 }
 
 const PARALLEL_UPLOADS = 2;
+/** First recheck after the server says it has not seen every object yet. */
+const MEDIA_RECHECK_DELAY_MS = 5000;
 const HEARTBEAT_MS = 60_000;
 /** submit -> upload -> finalize, with slack. A bound, not a schedule. */
 const MAX_PHASES_PER_ATTEMPT = 4;
@@ -288,13 +290,15 @@ class SyncEngine {
     const target = targets.find((t) =>
       photo.kind === 'signature' ? t.kind === 'signature' : t.photoIndex === photo.photo_index,
     );
-    // No target means the server already holds it: nothing owed.
-    if (!target) {
-      await setPhotoState(attempt.client_attempt_id, photo.photo_index, PhotoUploadState.Confirmed, {
-        confirmed_at: new Date().toISOString(),
-      });
-      return true;
-    }
+    // No target means the server did not ask for this object on this pass.
+    //
+    // It used to mean "the server already holds it", and the client marked the
+    // photo Confirmed on that reasoning. That is a durability claim only the
+    // server can make, and badges.ts promises the label never runs ahead of
+    // the server's ledger. Nothing local is changed here: the object is left
+    // exactly as it is and finalize decides, which is the only place that
+    // checks S3.
+    if (!target) return true;
 
     if (!fileExists(photo.local_path)) {
       await markNeedsAttention(
@@ -340,10 +344,15 @@ class SyncEngine {
         // Server is still owed something; come back after a backoff. The
         // retry budget applies here too, so an object the server will never
         // accept escalates to the driver instead of looping forever.
+        // Every PUT returned 200 before we got here, so the likeliest reading
+        // is that we asked a moment too early, not that anything failed. Come
+        // back in five seconds once, then fall into normal backoff if the
+        // server still disagrees.
         await scheduleRetry(
           attempt.client_attempt_id,
           'MEDIA_INCOMPLETE',
           'Server has not verified all evidence yet',
+          { firstDelayMs: MEDIA_RECHECK_DELAY_MS },
         );
         return false;
       }

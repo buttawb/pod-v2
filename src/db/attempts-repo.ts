@@ -256,6 +256,7 @@ export async function scheduleRetry(
   clientAttemptId: string,
   errorCode: string,
   errorMessage: string,
+  opts: { firstDelayMs?: number } = {},
 ): Promise<void> {
   const attempt = await getAttempt(clientAttemptId);
   if (!attempt) return;
@@ -266,9 +267,18 @@ export async function scheduleRetry(
     return;
   }
 
+  // A short first delay for the case where we know we are early rather than
+  // broken: the uploads returned 200 and the server has simply not caught up.
+  // Jittered exponential backoff from the first attempt treats "ask again in a
+  // moment" like a failure and can push the recheck minutes out.
+  const delay =
+    opts.firstDelayMs !== undefined && attempt.retry_count === 0
+      ? opts.firstDelayMs
+      : backoffDelayMs(retryCount);
+
   const backoff = {
     retry_count: retryCount,
-    next_retry_at: new Date(Date.now() + backoffDelayMs(retryCount)).toISOString(),
+    next_retry_at: new Date(Date.now() + delay).toISOString(),
     last_error_code: errorCode,
     last_error_message: errorMessage,
   };
