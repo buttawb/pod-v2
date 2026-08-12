@@ -1,6 +1,15 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { ListCard, PageHeader, Screen, SectionLabel, spacing } from '../ui/components';
+import {
+  ListCard,
+  PageHeader,
+  Screen,
+  SectionLabel,
+  spacing,
+  useEdgePadding,
+  CONTENT_MAX_WIDTH,
+} from '../ui/components';
+import { useAndroidBack } from '../ui/use-android-back';
 import { RouteMapScreen } from '../maps/RouteMapScreen';
 import { DepotMapScreen } from '../maps/DepotMapScreen';
 
@@ -13,7 +22,16 @@ export function MapsScreen({
   onOpenStop: (stopId: string) => void;
   onBack: () => void;
 }) {
+  const edge = useEdgePadding();
   const [surface, setSurface] = useState<Surface>('menu');
+
+  useAndroidBack(
+    useCallback(() => {
+      if (surface === 'menu') return false;
+      setSurface('menu');
+      return true;
+    }, [surface]),
+  );
 
   if (surface === 'route') {
     return <RouteMapScreen onOpenStop={onOpenStop} onBack={() => setSurface('menu')} />;
@@ -26,7 +44,7 @@ export function MapsScreen({
     <Screen>
       <PageHeader title="Maps" subtitle="Two views of the same day" onBack={onBack} />
 
-      <View style={styles.content}>
+      <View style={[styles.content, edge]}>
         <SectionLabel>Choose a view</SectionLabel>
 
         <ListCard
@@ -48,5 +66,11 @@ export function MapsScreen({
 }
 
 const styles = StyleSheet.create({
-  content: { padding: spacing.md, gap: spacing.sm },
+  content: {
+    paddingTop: spacing.md,
+    gap: spacing.sm,
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+  },
 });

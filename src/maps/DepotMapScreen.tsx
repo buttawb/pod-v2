@@ -239,7 +239,17 @@ export function DepotMapScreen({ onBack }: { onBack: () => void }) {
         )}
       </Map>
 
-      <View style={[styles.overlay, { top: insets.top + spacing.sm }]} pointerEvents="box-none">
+      <View
+        style={[
+          styles.overlay,
+          {
+            top: insets.top + spacing.sm,
+            left: insets.left + spacing.md,
+            right: insets.right + spacing.md,
+          },
+        ]}
+        pointerEvents="box-none"
+      >
         <View style={styles.topRow}>
           <Pressable
             accessibilityRole="button"
@@ -292,7 +302,16 @@ export function DepotMapScreen({ onBack }: { onBack: () => void }) {
         </ScrollView>
       </View>
 
-      <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
+      <View
+        style={[
+          styles.footer,
+          {
+            paddingBottom: Math.max(insets.bottom, spacing.sm),
+            left: insets.left + spacing.md,
+            right: insets.right + spacing.md,
+          },
+        ]}
+      >
         <Text style={styles.meta}>{ATTRIBUTION}</Text>
         {__DEV__ ? (
           <Text style={styles.meta}>
@@ -327,7 +346,7 @@ const styles = StyleSheet.create({
   map: { flex: 1 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md },
 
-  overlay: { position: 'absolute', left: spacing.md, right: spacing.md, gap: spacing.sm },
+  overlay: { position: 'absolute', gap: spacing.sm },
   topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   floatingButton: {
     width: 40,
@@ -365,7 +384,7 @@ const styles = StyleSheet.create({
   chipText: { fontSize: 13, fontWeight: '600', color: colors.text },
   chipTextOn: { color: '#FFFFFF' },
 
-  footer: { position: 'absolute', left: spacing.md, right: spacing.md, bottom: 0, gap: 2 },
+  footer: { position: 'absolute', bottom: 0, gap: 2 },
   meta: {
     fontSize: 11,
     color: colors.textMuted,

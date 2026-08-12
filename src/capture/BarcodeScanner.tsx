@@ -48,7 +48,9 @@ export function BarcodeScanner({
           onScanned(data);
         }}
       />
-      <View style={styles.reticle} pointerEvents="none" />
+      <View style={styles.reticleLayer} pointerEvents="none">
+        <View style={styles.reticle} />
+      </View>
       <BottomBar>
         <Button label="Type it instead" variant="secondary" onPress={onCancel} />
       </BottomBar>
@@ -60,12 +62,22 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.text },
   camera: { flex: 1 },
   message: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: spacing.sm, padding: spacing.lg },
-  reticle: {
+  // Centred rather than pinned to a percentage from the top: rotated, the
+  // screen is barely 400dp tall and a fixed offset put the reticle off centre.
+  reticleLayer: {
     position: 'absolute',
-    top: '35%',
-    left: '10%',
-    right: '10%',
-    height: 140,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reticle: {
+    width: '78%',
+    maxWidth: 460,
+    aspectRatio: 2.4,
+    maxHeight: '55%',
     borderWidth: 3,
     borderColor: '#FFFFFF',
     borderRadius: 12,

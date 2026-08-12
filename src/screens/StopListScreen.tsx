@@ -9,6 +9,8 @@ import {
   PageHeader,
   ProgressBar,
   Screen,
+  useEdgePadding,
+  CONTENT_MAX_WIDTH,
   SyncBadge,
   colors,
   radius,
@@ -32,6 +34,7 @@ export function StopListScreen({
   onOpenMap: () => void;
 }) {
   const insets = useSafeAreaInsets();
+  const edge = useEdgePadding();
   const [stops, setStops] = useState<StopWithSync[]>([]);
   const [banner, setBanner] = useState<BannerState>({
     label: '',
@@ -93,7 +96,7 @@ export function StopListScreen({
       <FlatList
         data={stops}
         keyExtractor={(item) => item.stop_id}
-        contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + spacing.xl }]}
+        contentContainerStyle={[styles.list, edge, { paddingBottom: insets.bottom + spacing.xl }]}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void onRefresh()} />}
         ListHeaderComponent={
           stops.length > 0 ? (
@@ -172,7 +175,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: colors.secondary,
   },
-  list: { padding: spacing.md, gap: spacing.sm },
+  list: {
+    paddingTop: spacing.md,
+    gap: spacing.sm,
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+  },
   summary: { gap: spacing.sm, marginBottom: spacing.xs },
   summaryRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },

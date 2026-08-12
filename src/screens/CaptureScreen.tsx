@@ -11,6 +11,8 @@ import {
   PageHeader,
   Screen,
   SectionLabel,
+  useEdgePadding,
+  CONTENT_MAX_WIDTH,
   colors,
   radius,
   spacing,
@@ -55,6 +57,7 @@ const OUTCOME_ICONS: Record<OutcomeValue, keyof typeof Feather.glyphMap> = {
 };
 
 export function CaptureScreen({ stopId, onDone }: { stopId: string; onDone: () => void }) {
+  const edge = useEdgePadding();
   const [draftId, setDraftId] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<OutcomeValue | null>(null);
   const [photos, setPhotos] = useState<PhotoRow[]>([]);
@@ -209,7 +212,7 @@ export function CaptureScreen({ stopId, onDone }: { stopId: string; onDone: () =
     <Screen>
       <PageHeader title="Record attempt" subtitle="Saved to this phone first" onBack={onDone} />
 
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <ScrollView contentContainerStyle={[styles.content, edge]} keyboardShouldPersistTaps="handled">
         <SectionLabel>What happened?</SectionLabel>
         <View style={styles.outcomeGrid}>
           {OUTCOME_ORDER.map((value) => {
@@ -393,7 +396,14 @@ export function CaptureScreen({ stopId, onDone }: { stopId: string; onDone: () =
 }
 
 const styles = StyleSheet.create({
-  content: { padding: spacing.md, paddingBottom: spacing.xl, gap: spacing.sm },
+  content: {
+    paddingTop: spacing.md,
+    paddingBottom: spacing.xl,
+    gap: spacing.sm,
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+  },
   section: { gap: spacing.sm },
   sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
 

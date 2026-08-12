@@ -10,7 +10,18 @@ import {
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Button, Card, Field, Input, Screen, colors, radius, spacing, type } from '../ui/components';
+import {
+  Button,
+  Card,
+  Field,
+  Input,
+  Screen,
+  colors,
+  radius,
+  spacing,
+  type,
+  useEdgePadding,
+} from '../ui/components';
 import { login } from '../auth/session';
 import { syncEngine } from '../sync/sync-engine';
 import { APP_VERSION } from '../config';
@@ -23,6 +34,7 @@ const DEV_PASSWORD = __DEV__ ? 'TestDriver#2026' : '';
 
 export function LoginScreen({ onSignedIn }: { onSignedIn: () => void }) {
   const insets = useSafeAreaInsets();
+  const edge = useEdgePadding();
   const [employeeRef, setEmployeeRef] = useState(DEV_DRIVER);
   const [password, setPassword] = useState(DEV_PASSWORD);
   const [error, setError] = useState<string | null>(null);
@@ -55,6 +67,7 @@ export function LoginScreen({ onSignedIn }: { onSignedIn: () => void }) {
         <ScrollView
           contentContainerStyle={[
             styles.content,
+            edge,
             { paddingTop: insets.top + spacing.xl, paddingBottom: insets.bottom + spacing.lg },
           ]}
           keyboardShouldPersistTaps="handled"
@@ -126,9 +139,13 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   content: {
     flexGrow: 1,
-    paddingHorizontal: spacing.md,
     gap: spacing.lg,
     justifyContent: 'center',
+    // Rotated, the screen is far wider than the form needs. Keeping the card
+    // a fixed column stops the fields becoming a single unreadable line.
+    width: '100%',
+    maxWidth: 460,
+    alignSelf: 'center',
   },
   brand: { alignItems: 'center', gap: 2 },
   mark: { width: 92, height: 66, marginBottom: spacing.md },

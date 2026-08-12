@@ -21,6 +21,7 @@ import {
   useVersionGate,
 } from './src/version/version-gate';
 import { colors, spacing, type } from './src/ui/theme';
+import { useAndroidBack } from './src/ui/use-android-back';
 
 type Route =
   | { name: 'stops' }
@@ -61,6 +62,23 @@ export default function App() {
   useEffect(() => {
     useVersionGate.getState().setRouteActive(signedIn);
   }, [signedIn]);
+
+  // Back walks our own stack: capture returns to the stop it belongs to, and
+  // only the stop list lets the press through to leave the app.
+  useAndroidBack(
+    useCallback(() => {
+      if (!signedIn) return false;
+      if (route.name === 'capture') {
+        setRoute({ name: 'stop', stopId: route.stopId });
+        return true;
+      }
+      if (route.name === 'stop' || route.name === 'maps') {
+        setRoute({ name: 'stops' });
+        return true;
+      }
+      return false;
+    }, [route, signedIn]),
+  );
 
   if (booting) {
     return (

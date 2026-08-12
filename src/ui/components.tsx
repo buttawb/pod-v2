@@ -27,6 +27,29 @@ export function Screen({ children, plain }: { children: ReactNode; plain?: boole
 }
 
 /**
+ * Horizontal page padding that also clears the display cutout.
+ *
+ * In portrait the cutout sits above the content and left/right are zero, so
+ * this reads as ordinary padding. Rotate the handset and the cutout moves to
+ * one side: without this a card edge, or worse a floating map control, ends
+ * up underneath it.
+ */
+export function useEdgePadding(): { paddingLeft: number; paddingRight: number } {
+  const insets = useSafeAreaInsets();
+  return {
+    paddingLeft: insets.left + spacing.md,
+    paddingRight: insets.right + spacing.md,
+  };
+}
+
+/**
+ * Caps a reading column on a wide screen. A landscape handset is roughly
+ * twice as wide as it is tall, and a form or a stat card stretched across all
+ * of it is harder to scan, not easier.
+ */
+export const CONTENT_MAX_WIDTH = 640;
+
+/**
  * Metronic's page header: title, supporting line, and an optional action on
  * the right. The back affordance is a target in its own right rather than a
  * chevron glued to the title, because it is pressed with a thumb.
@@ -43,8 +66,9 @@ export function PageHeader({
   right?: ReactNode;
 }) {
   const insets = useSafeAreaInsets();
+  const edge = useEdgePadding();
   return (
-    <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
+    <View style={[styles.header, edge, { paddingTop: insets.top + spacing.sm }]}>
       {onBack ? (
         <Pressable
           accessibilityRole="button"
@@ -74,9 +98,10 @@ export function PageHeader({
 /** Primary actions sit at the bottom, inside thumb reach and above the inset. */
 export function BottomBar({ children }: { children: ReactNode }) {
   const insets = useSafeAreaInsets();
+  const edge = useEdgePadding();
   return (
-    <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, spacing.md) }]}>
-      {children}
+    <View style={[styles.bottomBar, edge, { paddingBottom: Math.max(insets.bottom, spacing.md) }]}>
+      <View style={styles.bottomBarInner}>{children}</View>
     </View>
   );
 }
@@ -340,7 +365,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
-    paddingHorizontal: spacing.md,
     paddingBottom: spacing.md,
     backgroundColor: colors.background,
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -358,12 +382,18 @@ const styles = StyleSheet.create({
   pressedSurface: { backgroundColor: colors.input },
 
   bottomBar: {
-    paddingHorizontal: spacing.md,
     paddingTop: spacing.md,
-    gap: spacing.sm,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.border,
     backgroundColor: colors.background,
+  },
+  // In landscape the bar spans a very wide screen; the actions stay a
+  // thumb-sized column in the middle rather than stretching edge to edge.
+  bottomBarInner: {
+    gap: spacing.sm,
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
   },
 
   sectionLabel: { paddingHorizontal: spacing.xs, paddingBottom: spacing.xs },

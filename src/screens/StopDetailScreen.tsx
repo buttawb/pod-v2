@@ -11,6 +11,8 @@ import {
   Screen,
   SectionLabel,
   SyncBadge,
+  useEdgePadding,
+  CONTENT_MAX_WIDTH,
   colors,
   radius,
   spacing,
@@ -45,6 +47,7 @@ export function StopDetailScreen({
   onCapture: () => void;
   onBack: () => void;
 }) {
+  const edge = useEdgePadding();
   const [stop, setStop] = useState<StopRow | null>(null);
   const [attempts, setAttempts] = useState<AttemptSummary[]>([]);
   const gate = useVersionGate();
@@ -85,7 +88,7 @@ export function StopDetailScreen({
         />
       ) : null}
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView contentContainerStyle={[styles.content, edge]}>
         <Card style={styles.locationCard}>
           <View style={styles.locationRow}>
             <View style={styles.pin}>
@@ -181,7 +184,14 @@ function formatTime(iso: string): string {
 }
 
 const styles = StyleSheet.create({
-  content: { padding: spacing.md, paddingBottom: spacing.lg, gap: spacing.sm },
+  content: {
+    paddingTop: spacing.md,
+    paddingBottom: spacing.lg,
+    gap: spacing.sm,
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+  },
   locationCard: { marginBottom: spacing.sm },
   locationRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   pin: {

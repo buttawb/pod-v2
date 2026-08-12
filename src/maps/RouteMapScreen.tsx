@@ -128,7 +128,17 @@ export function RouteMapScreen({
         </GeoJSONSource>
       </Map>
 
-      <View style={[styles.overlay, { top: insets.top + spacing.sm }]} pointerEvents="box-none">
+      <View
+        style={[
+          styles.overlay,
+          {
+            top: insets.top + spacing.sm,
+            left: insets.left + spacing.md,
+            right: insets.right + spacing.md,
+          },
+        ]}
+        pointerEvents="box-none"
+      >
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Back to maps"
@@ -166,7 +176,12 @@ export function RouteMapScreen({
         </Pressable>
       ) : null}
 
-      <Text style={[styles.attribution, { bottom: Math.max(insets.bottom, spacing.sm) }]}>
+      <Text
+        style={[
+          styles.attribution,
+          { bottom: Math.max(insets.bottom, spacing.sm), left: insets.left + spacing.md },
+        ]}
+      >
         {ATTRIBUTION}
       </Text>
     </View>
@@ -180,8 +195,6 @@ const styles = StyleSheet.create({
 
   overlay: {
     position: 'absolute',
-    left: spacing.md,
-    right: spacing.md,
     flexDirection: 'row',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
@@ -223,7 +236,6 @@ const styles = StyleSheet.create({
 
   attribution: {
     position: 'absolute',
-    left: spacing.md,
     fontSize: 11,
     color: colors.textMuted,
     backgroundColor: 'rgba(255,255,255,0.85)',

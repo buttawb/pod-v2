@@ -3,7 +3,7 @@
     "name": "PoD v2",
     "slug": "pod-v2",
     "version": "2.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "android": {

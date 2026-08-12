@@ -2,7 +2,18 @@ import { useCallback, useEffect, useState } from 'react';
 import { Linking, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { BottomBar, Button, Card, Screen, colors, radius, spacing, type } from '../ui/components';
+import {
+  BottomBar,
+  Button,
+  Card,
+  Screen,
+  colors,
+  radius,
+  spacing,
+  type,
+  useEdgePadding,
+  CONTENT_MAX_WIDTH,
+} from '../ui/components';
 import { syncCounts } from '../db/attempts-repo';
 import { syncEngine } from '../sync/sync-engine';
 import { APK_DOWNLOAD_URL } from '../config';
@@ -14,6 +25,7 @@ import { APK_DOWNLOAD_URL } from '../config';
  */
 export function UpdateRequiredScreen() {
   const insets = useSafeAreaInsets();
+  const edge = useEdgePadding();
   const [pending, setPending] = useState(0);
   const [syncing, setSyncing] = useState(false);
 
@@ -31,7 +43,7 @@ export function UpdateRequiredScreen() {
 
   return (
     <Screen>
-      <View style={[styles.body, { paddingTop: insets.top + spacing.lg }]}>
+      <View style={[styles.body, edge, { paddingTop: insets.top + spacing.lg }]}>
         <View style={styles.icon}>
           <Feather name="download" size={26} color={colors.primary} />
         </View>
@@ -89,7 +101,15 @@ export function UpdateRequiredScreen() {
 }
 
 const styles = StyleSheet.create({
-  body: { flex: 1, padding: spacing.lg, gap: spacing.md, justifyContent: 'center' },
+  body: {
+    flex: 1,
+    paddingVertical: spacing.lg,
+    gap: spacing.md,
+    justifyContent: 'center',
+    width: '100%',
+    maxWidth: CONTENT_MAX_WIDTH,
+    alignSelf: 'center',
+  },
   icon: {
     width: 56,
     height: 56,
