@@ -385,10 +385,24 @@ export async function setPhotoState(
 }
 
 /**
- * Next attempt the worker may act on, oldest capture first.
+ * Next attempt the worker may act on, oldest capture first, and only ever the
+ * signed-in driver's own.
  *
  * `skip` holds the rows already handled in this run, so one attempt that
  * cannot progress does not block every attempt queued behind it.
+ *
+ * The driver scope is the important part. Without it this query returned any
+ * queued row on the device, and `apiRequest` always attaches the CURRENT
+ * session's token - so on a shared handset, driver A's unsent evidence was
+ * uploaded under driver B's credentials. The server takes driver_id from the
+ * token and not from the payload, so the outcome was either evidence
+ * attributed to the wrong person or a 403 that parked a real delivery in
+ * needs_attention. Either way the driver who stood at the door loses.
+ *
+ * Scoping here is what actually quarantines the previous driver's work: it
+ * stays on disk, attributed to them, and resumes untouched when they sign back
+ * in. Reading the id from sync_meta rather than taking a parameter keeps the
+ * signature argument-free, matching syncCounts below.
  */
 export async function claimNextWorkable(skip: Set<string> = new Set()): Promise<AttemptRow | null> {
   const skipped = [...skip];
@@ -396,6 +410,7 @@ export async function claimNextWorkable(skip: Set<string> = new Set()): Promise<
   return getDatabase().getFirstAsync<AttemptRow>(
     `SELECT * FROM attempts
      WHERE sync_state IN ('queued', 'attempt_acked', 'uploading_media')
+       AND driver_id = (SELECT value FROM sync_meta WHERE key = 'driver_id')
        AND (next_retry_at IS NULL OR next_retry_at <= ?)
        ${skipped.length > 0 ? `AND client_attempt_id NOT IN (${placeholders})` : ''}
      ORDER BY finalized_at ASC

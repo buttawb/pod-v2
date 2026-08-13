@@ -41,8 +41,11 @@ export class RetryTodayAndBarcodeMatch1755000000010 implements MigrationInterfac
 
     // The day list asks "which stops are still live today", so the index is
     // partial on the flag rather than spanning every attempt ever recorded.
+    // CONCURRENTLY for the reason given in 0008: delivery_attempts is the
+    // 14M-row table, and a lock-taking index build is exactly the maintenance
+    // window this system is not allowed to take.
     await queryRunner.query(
-      `CREATE INDEX IF NOT EXISTS idx_attempts_retry_today
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_attempts_retry_today
          ON delivery_attempts (stop_id, received_at DESC)
        WHERE retry_today`,
     );

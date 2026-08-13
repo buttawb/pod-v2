@@ -32,8 +32,15 @@ export class AttemptConflict1755000000008 implements MigrationInterface {
 
     // Partial: conflicts are rare by design, so the office queue should not
     // pay to scan an index over every attempt ever recorded.
+    //
+    // CONCURRENTLY because this lands on delivery_attempts, the table the whole
+    // design treats as 14M rows. A plain CREATE INDEX holds a lock that blocks
+    // writes for the length of the build, and "no maintenance window" is a
+    // constraint here rather than a preference. Safe because the data source
+    // runs migrations with transaction mode 'none'; this migration and 0010
+    // were both missing it.
     await queryRunner.query(
-      `CREATE INDEX IF NOT EXISTS idx_attempts_conflict
+      `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_attempts_conflict
          ON delivery_attempts (received_at DESC, id DESC)
        WHERE conflict`,
     );

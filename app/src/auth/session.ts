@@ -77,9 +77,17 @@ export async function login(employeeRef: string, password: string): Promise<void
   await setMeta('session_state', SessionState.Ok);
 
   if (previousDriverId && previousDriverId !== body.driver.id) {
-    // Shared device: the previous driver's unsent evidence stays on disk,
-    // attributed to them, and keeps uploading. Deleting another person's
-    // legal evidence is never an acceptable side effect of signing in.
+    // Shared device: the previous driver's unsent evidence stays on disk and
+    // attributed to them. Deleting another person's legal evidence is never an
+    // acceptable side effect of signing in.
+    //
+    // What actually holds that line is the driver predicate in
+    // claimNextWorkable (db/attempts-repo.ts), not this row: the queue only
+    // ever offers the signed-in driver's own attempts, so the previous
+    // driver's work cannot be uploaded under the new driver's token. This is a
+    // breadcrumb recording WHO is parked, for a "someone else has unsent work
+    // on this phone" surface that is not built. It is not the mechanism, and
+    // the comment used to imply otherwise.
     await setMeta('quarantined_driver_id', previousDriverId);
   }
 }
