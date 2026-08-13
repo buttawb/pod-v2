@@ -47,9 +47,19 @@ describe('offline cold start', () => {
     withTransactionAsync: jest.Mock;
   };
 
+  /** Which route dates the device has stored. Defaults to today's. */
+  let storedDates: string[];
+
   beforeEach(() => {
     jest.clearAllMocks();
-    getAllAsync = jest.fn().mockResolvedValue(CACHED_ROUND);
+    storedDates = [todayKey()];
+    // getTodayStops asks two questions: which rounds are on disk, then give me
+    // the rows for the one we settled on.
+    getAllAsync = jest.fn(async (sql: string) =>
+      sql.includes('DISTINCT route_date')
+        ? storedDates.map((route_date) => ({ route_date }))
+        : CACHED_ROUND,
+    );
     database = {
       getAllAsync,
       getFirstAsync: jest.fn(),
@@ -60,6 +70,10 @@ describe('offline cold start', () => {
     // Every network call fails, exactly as it does with no signal.
     api.mockRejectedValue(new Error('Network request failed'));
   });
+
+  /** The parameterised read, whichever call index it landed on. */
+  const roundQuery = () =>
+    getAllAsync.mock.calls.find(([sql]) => (sql as string).includes('FROM stops s'));
 
   it('renders the full day from SQLite with every request failing', async () => {
     const stops = await getTodayStops();
@@ -78,10 +92,44 @@ describe('offline cold start', () => {
   it('reads the day out of the database, not from a response', async () => {
     await getTodayStops();
 
-    const [sql, param] = getAllAsync.mock.calls[0];
+    const [sql, param] = roundQuery() ?? [];
     expect(sql).toContain('FROM stops s');
     expect(sql).toContain('WHERE s.route_date = ?');
     expect(param).toBe(todayKey());
+  });
+
+  /**
+   * route_date is the UTC date. East of Greenwich a driver starting before the
+   * rollover holds a round stamped with a key that is not today's, and the day
+   * vanished from a phone that had all of it on disk. The seed ships a Karachi
+   * depot, so this is reachable, not theoretical.
+   */
+  describe('when the stored round is not under today UTC key', () => {
+    it('falls back to the most recent round on the device', async () => {
+      storedDates = ['2026-08-11', '2026-08-12'];
+
+      const stops = await getTodayStops();
+
+      expect(stops).toHaveLength(3);
+      expect(roundQuery()?.[1]).toBe('2026-08-12');
+    });
+
+    it('still prefers today when today is there', async () => {
+      storedDates = ['2026-08-11', todayKey(), '2026-08-12'];
+
+      await getTodayStops();
+
+      expect(roundQuery()?.[1]).toBe(todayKey());
+    });
+
+    it('returns nothing, and asks for nothing, when no round is stored at all', async () => {
+      // A driver who has genuinely never pulled a round gets the empty state,
+      // not the most recent of zero rounds.
+      storedDates = [];
+
+      expect(await getTodayStops()).toEqual([]);
+      expect(roundQuery()).toBeUndefined();
+    });
   });
 
   it('keeps a cancelled stop in the round rather than dropping it', async () => {

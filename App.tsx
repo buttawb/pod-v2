@@ -169,6 +169,7 @@ export default function App() {
           <StopListScreen
             onOpenStop={(stopId) => setRoute({ name: 'stop', stopId })}
             onOpenMap={() => setRoute({ name: 'maps' })}
+            onSignedOut={() => setSignedIn(false)}
           />
         ) : route.name === 'stop' ? (
           <StopDetailScreen

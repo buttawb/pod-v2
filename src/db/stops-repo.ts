@@ -26,6 +26,8 @@ export interface StopWithSync extends StopRow {
   photos_confirmed: number;
   photos_total: number;
   next_retry_at: string | null;
+  /** Latest outcome recorded on this device, ahead of any server pull. */
+  latest_local_outcome: string | null;
 }
 
 interface ServerStop {
@@ -46,6 +48,12 @@ interface ServerStop {
  * in a basement work: the network is an enhancement, never a dependency.
  */
 export async function getTodayStops(): Promise<StopWithSync[]> {
+  const stored = await getDatabase().getAllAsync<{ route_date: string }>(
+    'SELECT DISTINCT route_date FROM stops',
+  );
+  const routeDate = resolveRouteDate(stored.map((row) => row.route_date));
+  if (routeDate === null) return [];
+
   return getDatabase().getAllAsync<StopWithSync>(
     // Drafts are abandoned or in-flight capture sessions, not recorded work:
     // the stop detail already hides them, and surfacing one here as a stop
@@ -81,6 +89,14 @@ export async function getTodayStops(): Promise<StopWithSync[]> {
             (SELECT count(*) FROM attempt_photos p
               JOIN attempts a ON a.client_attempt_id = p.client_attempt_id
              WHERE a.stop_id = s.stop_id AND a.sync_state <> 'draft') AS photos_total,
+            -- The outcome the driver last recorded on this phone. stops.status
+            -- is only written by a route pull, so offline it is whatever
+            -- dispatch last said; this is what lets the row show the delivery
+            -- the driver just made. Read-side only: nothing writes it back.
+            (SELECT a.outcome FROM attempts a
+              WHERE a.stop_id = s.stop_id AND a.sync_state <> 'draft'
+                AND a.outcome IS NOT NULL
+              ORDER BY a.captured_at DESC LIMIT 1) AS latest_local_outcome,
             -- So the row can say "retrying in Xs" rather than implying work
             -- is in flight while the attempt is parked behind a backoff.
             (SELECT a.next_retry_at FROM attempts a
@@ -90,7 +106,7 @@ export async function getTodayStops(): Promise<StopWithSync[]> {
      FROM stops s
      WHERE s.route_date = ?
      ORDER BY s.removed ASC, s.seq ASC`,
-    todayKey(),
+    routeDate,
   );
 }
 
@@ -156,4 +172,28 @@ export async function refreshTodayStops(): Promise<number> {
 
 export function todayKey(date = new Date()): string {
   return date.toISOString().slice(0, 10);
+}
+
+/**
+ * Which stored round to show.
+ *
+ * `route_date` is the UTC date, and the round is stamped with it when it is
+ * pulled. That is fine in London for most of the year and wrong elsewhere: a
+ * Karachi driver is UTC+5, so between midnight and 05:00 local the UTC date has
+ * not rolled over yet, and a driver starting early gets yesterday's key for a
+ * round stored under today's - or the reverse after the rollover. The result is
+ * an empty round on a phone that has the whole day sitting on disk, which reads
+ * as the offline promise failing at exactly the moment it matters.
+ *
+ * Rather than guess a timezone the device may not agree with, fall back: if
+ * nothing is stored under today's key, show the most recent round there is.
+ * Being one day out and showing work is recoverable; showing nothing is not.
+ * A driver whose round genuinely has not been pulled sees the empty state,
+ * because there is nothing stored at all.
+ */
+export function resolveRouteDate(available: string[], today = todayKey()): string | null {
+  if (available.includes(today)) return today;
+  if (available.length === 0) return null;
+  // Lexicographic max is chronological max for ISO dates.
+  return available.reduce((latest, date) => (date > latest ? date : latest));
 }

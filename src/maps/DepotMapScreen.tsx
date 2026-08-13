@@ -11,7 +11,7 @@ import {
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { apiRequest } from '../api/client';
-import { runCameraTour } from './perf-harness';
+import { RenderMode, runCameraTour } from './perf-harness';
 import { getTodayStops, type StopWithSync } from '../db/stops-repo';
 import { Button, colors, radius, shadow, spacing, type } from '../ui/components';
 import { navigateTo } from './navigate-to';
@@ -336,8 +336,11 @@ export function DepotMapScreen({
             onPress={() => {
               if (touring) return;
               setTouring(true);
-              void runCameraTour(cameraRef.current, (statuses) => setSelected(new Set(statuses)))
-                .finally(() => setTouring(false));
+              void runCameraTour(
+                cameraRef.current,
+                (statuses) => setSelected(new Set(statuses)),
+                legacy ? RenderMode.Legacy : RenderMode.Viewport,
+              ).finally(() => setTouring(false));
             }}
             style={styles.floatingButton}
           >

@@ -171,6 +171,7 @@ export function CaptureScreen({ stopId, onDone }: { stopId: string; onDone: () =
       photoCount,
       reasonCode,
       neighbourHouseNumber: houseNumber.trim() || null,
+      parcelBarcode: barcode.trim() || null,
     });
     // A mismatch asks for a reason and never blocks the attempt. Blocking
     // would not prevent bad data, it would manufacture it: a driver who
@@ -182,7 +183,16 @@ export function CaptureScreen({ stopId, onDone }: { stopId: string; onDone: () =
       return [...evidence, 'Say why this barcode does not match'];
     }
     return evidence;
-  }, [outcome, signaturePath, photoCount, reasonCode, houseNumber, barcodeMatch, overrideReason]);
+  }, [
+    outcome,
+    signaturePath,
+    photoCount,
+    reasonCode,
+    houseNumber,
+    barcode,
+    barcodeMatch,
+    overrideReason,
+  ]);
 
   const draftFields = useMemo(
     () => ({

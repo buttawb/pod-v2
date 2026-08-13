@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   FlatList,
   Modal,
   Pressable,
@@ -33,6 +34,7 @@ import {
   type,
 } from '../ui/components';
 import { attemptBadge, secondsUntilRetry, syncBanner, type BannerState } from '../sync/badges';
+import { displayStopStatus } from '../domain/outcomes';
 import {
   StopFilter,
   STOP_FILTER_LABELS,
@@ -43,7 +45,8 @@ import {
 } from '../domain/stop-filters';
 import { syncCounts } from '../db/attempts-repo';
 import { getTodayStops, refreshTodayStops, type StopWithSync } from '../db/stops-repo';
-import { getSessionState, SessionState } from '../auth/session';
+import { getSessionState, SessionState, signOut } from '../auth/session';
+import { planSignOut } from './sign-out';
 import { syncEngine } from '../sync/sync-engine';
 import { SyncState } from '../sync/state-machine';
 
@@ -111,7 +114,7 @@ interface StopRowProps {
 const StopListRow = memo(
   function StopListRow({ item, online, onPress }: StopRowProps) {
     const state = (item.worst_sync_state as SyncState | null) ?? null;
-    const complete = DONE_STATUSES.has(item.status);
+    const complete = DONE_STATUSES.has(displayStopStatus(item.status, item.latest_local_outcome));
     const hasLocalWork = item.attempt_count > 0 || item.has_unfinished_draft === 1;
     // Dispatch pulled the stop after the driver had already worked it. Never
     // greyed and never hidden: that evidence is real and still uploading, and
@@ -185,15 +188,20 @@ const StopListRow = memo(
     a.item.has_unfinished_draft === b.item.has_unfinished_draft &&
     a.item.photos_confirmed === b.item.photos_confirmed &&
     a.item.photos_total === b.item.photos_total &&
-    a.item.next_retry_at === b.item.next_retry_at,
+    a.item.next_retry_at === b.item.next_retry_at &&
+    // Drives the done tick while offline. Omitting it would memoize the row
+    // into showing pending for a delivery the driver had already recorded.
+    a.item.latest_local_outcome === b.item.latest_local_outcome,
 );
 
 export function StopListScreen({
   onOpenStop,
   onOpenMap,
+  onSignedOut,
 }: {
   onOpenStop: (stopId: string) => void;
   onOpenMap: () => void;
+  onSignedOut: () => void;
 }) {
   const insets = useSafeAreaInsets();
   const edge = useEdgePadding();
@@ -274,6 +282,28 @@ export function StopListScreen({
     return syncEngine.subscribe(() => void load());
   }, [load]);
 
+  // Counts are read fresh rather than from the banner: the driver is about to
+  // make a decision based on this number, so it should not be a render or two
+  // out of date.
+  const onSignOut = useCallback(() => {
+    void (async () => {
+      const plan = planSignOut(await syncCounts());
+      Alert.alert(plan.title, plan.message, [
+        { text: 'Stay signed in', style: 'cancel' },
+        {
+          text: plan.confirmLabel,
+          style: plan.hasUnsentWork ? 'destructive' : 'default',
+          onPress: () => {
+            void (async () => {
+              await signOut();
+              onSignedOut();
+            })();
+          },
+        },
+      ]);
+    })();
+  }, [onSignedOut]);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     setOfflineNote(false);
@@ -295,7 +325,9 @@ export function StopListScreen({
     }
   }, [load]);
 
-  const done = stops.filter((s) => DONE_STATUSES.has(s.status)).length;
+  const done = stops.filter((s) =>
+    DONE_STATUSES.has(displayStopStatus(s.status, s.latest_local_outcome)),
+  ).length;
 
   return (
     <Screen>
@@ -307,14 +339,30 @@ export function StopListScreen({
           month: 'long',
         })}
         right={
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Open maps"
-            onPress={onOpenMap}
-            style={({ pressed }) => [styles.mapButton, pressed && { backgroundColor: colors.input }]}
-          >
-            <Feather name="map" size={20} color={colors.text} />
-          </Pressable>
+          <View style={styles.headerActions}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Open maps"
+              onPress={onOpenMap}
+              style={({ pressed }) => [
+                styles.mapButton,
+                pressed && { backgroundColor: colors.input },
+              ]}
+            >
+              <Feather name="map" size={20} color={colors.text} />
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Sign out"
+              onPress={onSignOut}
+              style={({ pressed }) => [
+                styles.mapButton,
+                pressed && { backgroundColor: colors.input },
+              ]}
+            >
+              <Feather name="log-out" size={20} color={colors.text} />
+            </Pressable>
+          </View>
         }
       />
 
@@ -499,6 +547,7 @@ export function StopListScreen({
 }
 
 const styles = StyleSheet.create({
+  headerActions: { flexDirection: 'row', gap: spacing.xs },
   mapButton: {
     width: 44,
     height: 44,

@@ -2,26 +2,29 @@ import type { CameraRef } from '@maplibre/maplibre-react-native';
 import { StatusCode } from './basemap';
 
 /**
- * Performance work that can be defended has to be reproducible, so the
- * depot map ships with three render modes and one scripted camera tour.
- * Every quoted number in DECISIONS.md comes from running the SAME tour in
- * each mode, on the same device, from a release build.
+ * Performance work that can be defended has to be reproducible, so the depot
+ * map ships both architectures and one scripted camera tour. Every quoted
+ * number comes from running the SAME tour in each mode, on the same device,
+ * from the same release build.
  *
- * Switch with:  EXPO_PUBLIC_RENDER_MODE=markers|symbols|clustered
+ * The two modes are toggled on screen, from the button beside this tour's play
+ * button in DepotMapScreen - there is no build flag, deliberately, because a
+ * comparison that needs two builds is a comparison of two builds.
+ *
+ * This previously declared three modes (markers / symbols / clustered) behind
+ * an EXPO_PUBLIC_RENDER_MODE variable that nothing ever read: the screen only
+ * has the two below, and the constant was dead. A perf harness that describes
+ * modes it cannot produce is worse than no harness, because the numbers it
+ * labels are then unattributable.
  */
 export const RenderMode = {
-  /** Naive baseline: one native view per stop (what most implementations do). */
-  Markers: 'markers',
-  /** GPU layer, but unclustered symbols pay collision detection per frame. */
-  Symbols: 'symbols',
-  /** Shipped: clustered circles with data-driven colour. */
-  Clustered: 'clustered',
+  /** Before: fetch every stop the depot owns, once, and cluster on device. */
+  Legacy: 'legacy',
+  /** After (shipped): viewport-scoped, aggregated in Postgres, GPU layers. */
+  Viewport: 'viewport',
 } as const;
 
 export type RenderMode = (typeof RenderMode)[keyof typeof RenderMode];
-
-export const RENDER_MODE: RenderMode =
-  (process.env.EXPO_PUBLIC_RENDER_MODE as RenderMode | undefined) ?? RenderMode.Clustered;
 
 export interface TourStats {
   mode: RenderMode;
@@ -55,6 +58,8 @@ const TOUR: TourStep[] = [
 export async function runCameraTour(
   camera: CameraRef | null,
   setFilter: (statuses: StatusCode[]) => void,
+  /** Which architecture is on screen right now; the caller owns the toggle. */
+  mode: RenderMode,
 ): Promise<TourStats> {
   const started = Date.now();
 
@@ -64,5 +69,5 @@ export async function runCameraTour(
     await new Promise((resolve) => setTimeout(resolve, step.holdMs));
   }
 
-  return { mode: RENDER_MODE, durationMs: Date.now() - started, steps: TOUR.length };
+  return { mode, durationMs: Date.now() - started, steps: TOUR.length };
 }

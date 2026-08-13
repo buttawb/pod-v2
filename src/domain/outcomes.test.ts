@@ -2,16 +2,25 @@ import {
   BARCODE_OVERRIDE_REASONS,
   Outcome,
   RETRY_TODAY_OUTCOMES,
+  STOP_STATUS_BY_OUTCOME,
   barcodeMatches,
+  displayStopStatus,
   validateEvidence,
   type EvidenceInput,
 } from './outcomes';
 
+/**
+ * A barcode is present in the baseline because every real attempt has one: the
+ * driver is holding the parcel. The outcome matrix below is about what else
+ * each outcome needs, so it should not be re-testing the barcode rule in all
+ * fourteen rows. That rule gets its own tests further down.
+ */
 const base: EvidenceInput = {
   hasSignature: false,
   photoCount: 0,
   reasonCode: null,
   neighbourHouseNumber: null,
+  parcelBarcode: 'JD0001',
 };
 
 /**
@@ -53,6 +62,67 @@ describe('evidence matrix (client-side, offline-capable)', () => {
 });
 
 /**
+ * The brief: "Every attempt also captures ... the scanned or manually entered
+ * parcel barcode."
+ *
+ * Absence and mismatch are different rules and pull in opposite directions. A
+ * missing barcode blocks, because an attempt against no parcel is not evidence
+ * of anything. A mismatched barcode never blocks, because a driver who cannot
+ * record what happened records something else instead.
+ */
+describe('the parcel barcode is required, whatever the outcome', () => {
+  it.each(Object.values(Outcome))('blocks %s when the field is empty', (outcome) => {
+    // Enough evidence for every outcome, so the barcode is the only thing left
+    // that can be wrong.
+    const satisfied: EvidenceInput = {
+      hasSignature: outcome === Outcome.DeliveredToPerson,
+      photoCount: 1,
+      reasonCode: ([Outcome.Refused, Outcome.AccessFailure] as Outcome[]).includes(outcome)
+        ? 'Gate locked'
+        : null,
+      neighbourHouseNumber: outcome === Outcome.LeftWithNeighbour ? '42' : null,
+      parcelBarcode: null,
+    };
+
+    expect(validateEvidence(outcome, satisfied)).toContain('Scan or type the parcel barcode');
+    expect(validateEvidence(outcome, { ...satisfied, parcelBarcode: 'JD0001' })).not.toContain(
+      'Scan or type the parcel barcode',
+    );
+  });
+
+  it('treats whitespace as empty', () => {
+    expect(validateEvidence(Outcome.LeftSafePlace, { ...base, photoCount: 1, parcelBarcode: '   ' })).toContain(
+      'Scan or type the parcel barcode',
+    );
+  });
+
+  it('accepts a typed barcode exactly as it accepts a scanned one', () => {
+    // validateEvidence sees a string, not a provenance. Manual entry is a
+    // first-class path: scanners fail and labels get damaged, and the source is
+    // recorded separately on the attempt.
+    expect(
+      validateEvidence(Outcome.LeftSafePlace, { ...base, photoCount: 1, parcelBarcode: 'JD0009' }),
+    ).toEqual([]);
+  });
+
+  it('still blocks when the barcode is missing AND other evidence is missing', () => {
+    // Both violations surface; the barcode does not mask the rest.
+    const violations = validateEvidence(Outcome.LeftSafePlace, { ...base, photoCount: 0, parcelBarcode: null });
+    expect(violations).toContain('Scan or type the parcel barcode');
+    expect(violations).toContain('At least 1 photo needed');
+  });
+
+  it('does not block on a mismatch: that is the override path, not this rule', () => {
+    // A barcode that is present but wrong satisfies THIS rule. The mismatch is
+    // handled separately, by asking for a reason, and never by refusing the
+    // attempt.
+    expect(
+      validateEvidence(Outcome.LeftSafePlace, { ...base, photoCount: 1, parcelBarcode: 'WRONG-LABEL' }),
+    ).toEqual([]);
+  });
+});
+
+/**
  * The barcode check exists to record a discrepancy, never to prevent one.
  *
  * Blocking on a mismatch does not stop bad data reaching the system, it
@@ -87,6 +157,56 @@ describe('barcode comparison', () => {
     // to a report and one thing to a human.
     expect(BARCODE_OVERRIDE_REASONS.length).toBeGreaterThan(0);
     expect(new Set(BARCODE_OVERRIDE_REASONS).size).toBe(BARCODE_OVERRIDE_REASONS.length);
+  });
+});
+
+/**
+ * stops.status is written only by a route pull, so offline it is whatever
+ * dispatch last sent. Without this the app disbelieves evidence it is holding:
+ * a driver delivers in a basement, the attempt queues correctly, and the stop
+ * still reads pending with the header counting it as outstanding.
+ */
+describe('the stop list believes the evidence on the phone', () => {
+  it('keeps the server status when the driver has recorded nothing', () => {
+    expect(displayStopStatus('pending', null)).toBe('pending');
+    expect(displayStopStatus('pending', undefined)).toBe('pending');
+    expect(displayStopStatus('attempted', '')).toBe('attempted');
+  });
+
+  it('marks a stop delivered from a local attempt, with no pull', () => {
+    for (const outcome of [
+      Outcome.DeliveredToPerson,
+      Outcome.LeftWithNeighbour,
+      Outcome.LeftSafePlace,
+    ]) {
+      expect(displayStopStatus('pending', outcome)).toBe('delivered');
+    }
+  });
+
+  it('treats a refusal as settled and carded as still open', () => {
+    // The distinction the day count depends on: refused is finished, carded is
+    // not, and both are "attempted" to the driver until dispatch says more.
+    expect(displayStopStatus('pending', Outcome.Refused)).toBe('failed');
+    expect(displayStopStatus('pending', Outcome.NoAnswerCarded)).toBe('attempted');
+    expect(displayStopStatus('pending', Outcome.AccessFailure)).toBe('attempted');
+  });
+
+  it('lets the local attempt override a stale server status', () => {
+    // The pull said pending because it happened before the delivery. Evidence
+    // outranks the list, which is the same ordering the conflict rule uses.
+    expect(displayStopStatus('pending', Outcome.LeftSafePlace)).toBe('delivered');
+  });
+
+  it('falls back to the server status if the outcome is unrecognised', () => {
+    // A row written by a newer build than this one. Showing dispatch's answer
+    // beats inventing a status the rest of the UI has no styling for.
+    expect(displayStopStatus('attempted', 'teleported_it')).toBe('attempted');
+  });
+
+  it('maps every outcome, so a new one cannot silently fall through', () => {
+    for (const outcome of Object.values(Outcome)) {
+      expect(STOP_STATUS_BY_OUTCOME[outcome]).toBeDefined();
+    }
   });
 });
 

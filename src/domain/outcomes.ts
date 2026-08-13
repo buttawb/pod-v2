@@ -139,18 +139,78 @@ export function barcodeMatches(
   return a === b;
 }
 
+/**
+ * What an outcome does to the stop, mirroring the server's projection
+ * (backend/src/domain/outcomes.ts): delivered outcomes settle the stop, a
+ * refusal is final, carded and no-access mean "may come back".
+ */
+export const STOP_STATUS_BY_OUTCOME: Record<Outcome, 'delivered' | 'attempted' | 'failed'> = {
+  [Outcome.DeliveredToPerson]: 'delivered',
+  [Outcome.LeftWithNeighbour]: 'delivered',
+  [Outcome.LeftSafePlace]: 'delivered',
+  [Outcome.NoAnswerCarded]: 'attempted',
+  [Outcome.Refused]: 'failed',
+  [Outcome.AccessFailure]: 'attempted',
+};
+
+/**
+ * The status to show for a stop, given what the server last said and what the
+ * driver has recorded on this phone since.
+ *
+ * `stops.status` is only ever written by a route pull, so offline it is
+ * whatever dispatch last sent. A driver could deliver a parcel in a basement,
+ * watch the attempt queue correctly, and still see the stop listed as pending
+ * with the header counting it as outstanding - the app disbelieving evidence it
+ * is itself holding.
+ *
+ * The local attempt wins because it is newer and it is first-hand. This is a
+ * display decision only: nothing is written back, the server still owns the
+ * column, and the next pull overwrites the view with dispatch's version. That
+ * ordering is the same one the conflict rule uses - evidence outranks the list.
+ */
+export function displayStopStatus(
+  serverStatus: string,
+  latestLocalOutcome: Outcome | string | null | undefined,
+): string {
+  if (!latestLocalOutcome) return serverStatus;
+  return STOP_STATUS_BY_OUTCOME[latestLocalOutcome as Outcome] ?? serverStatus;
+}
+
 export interface EvidenceInput {
   hasSignature: boolean;
   photoCount: number;
   reasonCode: string | null;
   neighbourHouseNumber: string | null;
+  /** Scanned or typed by hand; either satisfies the requirement. */
+  parcelBarcode: string | null;
 }
 
-/** Empty array = ready to submit. Same contract as the server's validator. */
+/**
+ * Empty array = ready to submit.
+ *
+ * This matches the server's validator on every outcome rule, and deliberately
+ * adds one the server does not enforce: the parcel barcode.
+ *
+ * The brief requires every attempt to carry the scanned or manually entered
+ * barcode. Both capture paths existed, with provenance and mismatch handling,
+ * but nothing ever made it mandatory - an empty field compares as null rather
+ * than as a mismatch, so it gated nothing and an attempt could be recorded
+ * against no parcel at all.
+ *
+ * The gate is client-side ONLY, and that asymmetry is deliberate rather than an
+ * oversight. The same check on the server would 422 every attempt already
+ * queued on an installed handset, and the sync engine treats 4xx as permanent,
+ * so those would park in needs_attention and never auto-clear: a rule meant to
+ * strengthen evidence would strand evidence already captured. New builds cannot
+ * produce a barcode-less attempt; old builds keep syncing what they hold. The
+ * server tightens once the fleet has moved, which is the same expand-then-
+ * contract discipline the schema migrations use.
+ */
 export function validateEvidence(outcome: Outcome, input: EvidenceInput): string[] {
   const spec = OUTCOME_SPECS[outcome];
   const violations: string[] = [];
 
+  if (!input.parcelBarcode?.trim()) violations.push('Scan or type the parcel barcode');
   if (spec.signature === 'required' && !input.hasSignature) violations.push('Signature needed');
   if (spec.signature === 'forbidden' && input.hasSignature) violations.push('Signature not allowed here');
   if (input.photoCount < spec.photos.min) {
