@@ -211,6 +211,135 @@ async function insertStops(stops: SeedStop[]): Promise<void> {
   }
 }
 
+/**
+ * Works part of a round: v2 attempts, the stop status they project, and the
+ * `pods` summary v1 still reads.
+ *
+ * A seeded day where every stop is pending demonstrates an empty morning rather
+ * than a delivery system. The London round only ever looked worked because
+ * development traffic happened to land on it, which nothing a fresh install or
+ * a rolled demo day inherits.
+ *
+ * These rows are FIXTURES, inserted straight into the table rather than through
+ * POST /api/v2/attempts. Two consequences worth stating, because a reviewer
+ * will find them:
+ *
+ *   - they declare no photographs and no signature, so evidence_status is
+ *     'complete' in the honest sense that the server is owed nothing. There are
+ *     no S3 objects behind them and the media endpoints will find none.
+ *   - the capture API enforces the evidence matrix (a safe-place delivery needs
+ *     a photograph); writing to the table directly bypasses it. Real captures
+ *     cannot.
+ *
+ * Seeding only the two outcomes that need no media would make every worked stop
+ * a refusal or a failed access, which misrepresents a round considerably more
+ * than a fixture without a photograph does.
+ */
+async function seedWorkedAttempts(
+  driverIds: string[],
+  label: string,
+  workedFraction: number,
+): Promise<void> {
+  // Weighted to look like a real morning: mostly delivered, with a tail of the
+  // outcomes that make a round worth looking at on a map.
+  const OUTCOMES: Array<[string, number]> = [
+    ['delivered_to_person', 0.46],
+    ['left_safe_place', 0.24],
+    ['left_with_neighbour', 0.12],
+    ['no_answer_carded', 0.12],
+    ['access_failure', 0.04],
+    ['refused', 0.02],
+  ];
+  const pickOutcome = (): string => {
+    let r = rand();
+    for (const [outcome, weight] of OUTCOMES) {
+      if ((r -= weight) <= 0) return outcome;
+    }
+    return 'delivered_to_person';
+  };
+  const STATUS: Record<string, string> = {
+    delivered_to_person: 'delivered',
+    left_with_neighbour: 'delivered',
+    left_safe_place: 'delivered',
+    no_answer_carded: 'attempted',
+    access_failure: 'attempted',
+    refused: 'failed',
+  };
+
+  let worked = 0;
+  for (const driverId of driverIds) {
+    const stops = (await AppDataSource.query(
+      `SELECT id, lat, lng, expected_barcode, created_at
+         FROM stops
+        WHERE driver_id = $1 AND created_at >= date_trunc('day', now())
+        ORDER BY sequence ASC`,
+      [driverId],
+    )) as Array<{
+      id: string;
+      lat: number | null;
+      lng: number | null;
+      expected_barcode: string | null;
+      created_at: Date;
+    }>;
+
+    // The worked portion is the FRONT of the round, because a driver works in
+    // sequence. Scattering completions through the day would put a delivered
+    // stop after fifty pending ones, which no real round looks like.
+    const upTo = Math.floor(stops.length * workedFraction);
+    for (let i = 0; i < upTo; i += 1) {
+      const stop = stops[i];
+      const outcome = pickOutcome();
+      const capturedAt = new Date(stop.created_at).toISOString();
+      const needsReason = outcome === 'refused' || outcome === 'access_failure';
+
+      await AppDataSource.query(
+        `INSERT INTO delivery_attempts
+           (client_attempt_id, stop_id, driver_id, outcome, reason_code, neighbour_house_number,
+            note, parcel_barcode, barcode_source, barcode_match, lat, lng, gps_accuracy_m,
+            captured_at, received_at, app_version, source, declared_photo_count,
+            evidence_status, payload_hash)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'scanned',true,$9,$10,$11,$12,$12,'2.0.0','v2',0,'complete',$13)
+         ON CONFLICT (client_attempt_id) DO NOTHING`,
+        [
+          randomUUID(),
+          stop.id,
+          driverId,
+          outcome,
+          needsReason ? (outcome === 'refused' ? 'customer_refused' : 'gate_locked') : null,
+          outcome === 'left_with_neighbour' ? String(1 + Math.floor(rand() * 90)) : null,
+          outcome === 'left_safe_place' ? 'left round the back, gate was open' : null,
+          stop.expected_barcode,
+          stop.lat,
+          stop.lng,
+          6 + Math.floor(rand() * 18),
+          capturedAt,
+          randomUUID(),
+        ],
+      );
+
+      await AppDataSource.query(`UPDATE stops SET status = $2, updated_at = now() WHERE id = $1`, [
+        stop.id,
+        STATUS[outcome],
+      ]);
+
+      // The projection v1.4.2 reads, in the shape the dual-write produces.
+      await AppDataSource.query(
+        `INSERT INTO pods (stop_id, delivered, location, note, created_at)
+         VALUES ($1,$2,$3,$4,$5) ON CONFLICT (stop_id) DO NOTHING`,
+        [
+          stop.id,
+          STATUS[outcome] === 'delivered',
+          stop.lat !== null && stop.lng !== null ? `${stop.lat},${stop.lng}` : null,
+          needsReason ? 'could not complete' : null,
+          capturedAt,
+        ],
+      );
+      worked += 1;
+    }
+  }
+  console.log(`Worked ${worked} stops for ${label} (attempts, stop status, pods summary).`);
+}
+
 async function main(): Promise<void> {
   await AppDataSource.initialize();
 
@@ -269,16 +398,22 @@ async function main(): Promise<void> {
   await insertStops(today);
 
   console.log(`Seeding ${PK_STOPS} stops for the Pakistan depot...`);
+  // Its own array, deliberately. These used to be pushed onto `today`, which
+  // had already been inserted on the line above, so the push went nowhere and
+  // the Karachi depot was never seeded on a fresh install: the drivers existed
+  // and their round did not.
+  const pkToday: SeedStop[] = [];
   const pkPerDriver = Math.floor(PK_STOPS / PK_DRIVER_COUNT);
   pkDriverIds.forEach((driverId, d) => {
     const count = d === pkDriverIds.length - 1 ? PK_STOPS - pkPerDriver * (PK_DRIVER_COUNT - 1) : pkPerDriver;
     for (let seq = 1; seq <= count; seq += 1) {
       const through = (seq - 1) / Math.max(count - 1, 1);
-      today.push(
+      pkToday.push(
         makeStop(driverId, seq, dayTimestamp(Math.min(through + rand() * 0.02, 1)), true, 'pk'),
       );
     }
   });
+  await insertStops(pkToday);
 
   console.log(`Seeding ${HISTORICAL_STOPS} historical stops with legacy pods rows...`);
   const historical: SeedStop[] = [];
@@ -314,6 +449,13 @@ async function main(): Promise<void> {
       params,
     );
   }
+
+  // Both depots get a worked front-of-round, so the app, the maps and the
+  // office dashboard all open on a day in progress rather than an empty one.
+  // Karachi is worked slightly harder than London purely so the two rounds do
+  // not look like copies of each other.
+  await seedWorkedAttempts(driverIds, 'the London depot', 0.28);
+  await seedWorkedAttempts(pkDriverIds, 'the Karachi depot', 0.35);
 
   const [stopCount] = (await AppDataSource.query(`SELECT count(*)::int AS n FROM stops`)) as Array<{ n: number }>;
   const [podCount] = (await AppDataSource.query(`SELECT count(*)::int AS n FROM pods`)) as Array<{ n: number }>;

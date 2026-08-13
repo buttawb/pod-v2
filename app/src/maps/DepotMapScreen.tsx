@@ -12,6 +12,8 @@ import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { apiRequest } from '../api/client';
 import { RenderMode, runCameraTour } from './perf-harness';
+import { resolveInitialCamera, zoomFor } from './initial-camera';
+import { getCurrentFix } from '../capture/media';
 import { getTodayStops, type StopWithSync } from '../db/stops-repo';
 import { Button, colors, radius, shadow, spacing, type } from '../ui/components';
 import { navigateTo } from './navigate-to';
@@ -100,6 +102,17 @@ export function DepotMapScreen({
   const mapRef = useRef<MapRef>(null);
   const [pin, setPin] = useState<SelectedPin | null>(null);
 
+  /**
+   * Open where the driver is, not where the depot's head office happens to be.
+   *
+   * Moved after the map is ready rather than through initialViewState, because
+   * the fix arrives asynchronously and a map that waits for GPS before drawing
+   * anything is worse than one that opens on a fallback and then settles.
+   * Guarded so it happens at most once: a later move would pull the map out
+   * from under a driver who had already started panning.
+   */
+  const centredOnDriver = useRef(false);
+
   const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const viewport = useRef<{ bbox: string; zoom: number } | null>(null);
   // Rising id: a slow response for an old viewport must never overwrite a
@@ -154,6 +167,24 @@ export function DepotMapScreen({
     void (async () => {
       const map = mapRef.current;
       if (!map) return;
+
+      // Centre on the driver first, so the bounds we then read are the ones
+      // they will actually be looking at. Reading bounds first and moving
+      // after would fetch a viewport nobody sees and immediately refetch.
+      if (!centredOnDriver.current) {
+        centredOnDriver.current = true;
+        const target = resolveInitialCamera(await getCurrentFix());
+        if (target.source === 'device') {
+          cameraRef.current?.flyTo({
+            center: target.center,
+            zoom: zoomFor(target.source, DEPOT_ZOOM),
+            // No animation: this is where the map should have opened, not a
+            // journey the driver needs to watch.
+            duration: 0,
+          });
+        }
+      }
+
       const [bounds, zoom] = await Promise.all([map.getBounds(), map.getZoom()]);
       const [west, south, east, north] = bounds;
       viewport.current = { bbox: `${west},${south},${east},${north}`, zoom };
