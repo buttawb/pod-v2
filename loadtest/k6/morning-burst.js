@@ -57,9 +57,23 @@ export default function morningBurst() {
   const stop = stops[Math.floor(Math.random() * stops.length)];
   const clientAttemptId = uuid();
 
+  /**
+   * One body, built once, sent as-is on both the submit and the replay.
+   *
+   * The replay used to call attemptBody() a second time. That helper
+   * randomises lat/lng and stamps a fresh capturedAt, and the server hashes
+   * exactly those fields into payload_hash, so the "retry" was really
+   * same-key-different-payload: the 422 tripwire firing precisely as designed,
+   * against a check asserting a 200 dedupe. The scenario could never pass.
+   *
+   * What a retrying app actually does is resend bytes it already holds on
+   * disk, which is what this now models.
+   */
+  const body = attemptBody(clientAttemptId, stop.id);
+
   const submit = http.post(
     `${BASE_URL}/api/v2/attempts`,
-    attemptBody(clientAttemptId, stop.id),
+    body,
     authHeaders(token, 'attempt-submit'),
   );
   check(submit, {
@@ -72,7 +86,7 @@ export default function morningBurst() {
   if (Math.random() < 0.1 && submit.status === 200) {
     const replay = http.post(
       `${BASE_URL}/api/v2/attempts`,
-      attemptBody(clientAttemptId, stop.id),
+      body,
       authHeaders(token, 'attempt-replay'),
     );
     const isDeduped = replay.status === 200 && replay.json('deduplicated') === true;

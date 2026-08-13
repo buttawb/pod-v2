@@ -14,7 +14,7 @@ handsets cannot be updated. Two repositories:
 | API docs | https://18.139.240.68.sslip.io/api/docs (Authorize with a token from any login below) |
 | Android APK | _see releases / link in the submission email_ |
 | Driver login | `EMP-TEST-001` / `TestDriver#2026` (London round, 151 stops) |
-| Karachi round | `EMP-PK-001` / `TestDriver#2026` (320-stop Pakistan depot) |
+| Karachi round | `EMP-PK-001` / `TestDriver#2026` (320-stop depot, 40-stop round) |
 | Office login | `office@demo.pod` / `OfficeDemo#2026` |
 
 ## Run it locally

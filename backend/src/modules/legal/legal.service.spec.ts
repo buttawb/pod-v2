@@ -1,4 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { compare } from 'bcryptjs';
 import type { DataSource } from 'typeorm';
 import { LegalService, SubjectType } from './legal.service';
 
@@ -48,7 +49,7 @@ describe('erasure (contacts go, evidence stays, and it is all recorded)', () => 
 
     const result = await service.erase(ACTOR, SubjectType.Driver, DRIVER, true);
 
-    expect(result.fieldsRedacted).toEqual(['email', 'display_name']);
+    expect(result.fieldsRedacted).toEqual(['email', 'display_name', 'password_hash']);
     const update = queries.find((q) => q.sql.includes('UPDATE drivers'));
     expect(update?.sql).toContain('email = $2');
     expect(update?.sql).toContain('display_name = $3');
@@ -56,6 +57,49 @@ describe('erasure (contacts go, evidence stays, and it is all recorded)', () => 
     // tables, so it gets a marker that says plainly what happened instead of
     // looking like data that was never collected.
     expect(update?.params).toEqual([DRIVER, null, '[erased]']);
+  });
+
+  it('overwrites the credential, so an erased subject cannot simply sign back in', async () => {
+    const { service, queries } = build();
+
+    await service.erase(ACTOR, SubjectType.Driver, DRIVER, true);
+
+    // Revoking refresh tokens only closes the sessions that exist. Without
+    // this, an erased driver signs in again seconds later with the password
+    // they still know and mints a fresh family, and "erased" degrades to
+    // "logged out". There is no other deactivation path in the API.
+    const credential = queries.find(
+      (q) => q.sql.includes('UPDATE drivers') && q.sql.includes('password_hash'),
+    );
+    expect(credential).toBeDefined();
+    expect(credential?.params[0]).toBe(DRIVER);
+
+    const written = credential?.params[1] as string;
+    // A well-formed bcrypt hash, not a sentinel: the column is NOT NULL and
+    // every read path expects to be able to compare against it. A malformed
+    // value would leave us depending on the comparison library returning false
+    // rather than throwing.
+    expect(written).toMatch(/^\$2[aby]\$/);
+    // And it matches nothing. Not the seeded password, not the marker itself.
+    await expect(compare('TestDriver#2026', written)).resolves.toBe(false);
+    await expect(compare('[erased]', written)).resolves.toBe(false);
+    await expect(compare('', written)).resolves.toBe(false);
+  });
+
+  it('writes a different credential every time, so one erasure cannot unlock another', async () => {
+    const first = build();
+    const second = build();
+
+    await first.service.erase(ACTOR, SubjectType.Driver, DRIVER, true);
+    await second.service.erase(ACTOR, SubjectType.Driver, DRIVER, true);
+
+    // A fixed replacement hash would be a master key across every erased
+    // account the moment anyone learned its plaintext.
+    const hashOf = (queries: Array<{ sql: string; params: unknown[] }>) =>
+      queries.find((q) => q.sql.includes('UPDATE drivers') && q.sql.includes('password_hash'))
+        ?.params[1];
+
+    expect(hashOf(first.queries)).not.toBe(hashOf(second.queries));
   });
 
   it('revokes every refresh token the subject holds', async () => {
@@ -106,7 +150,7 @@ describe('erasure (contacts go, evidence stays, and it is all recorded)', () => 
     expect(log?.params[0]).toBe(ACTOR);
     expect(log?.params[1]).toBe(SubjectType.Driver);
     expect(log?.params[2]).toBe(DRIVER);
-    expect(JSON.parse(log?.params[3] as string)).toEqual(['email', 'display_name']);
+    expect(JSON.parse(log?.params[3] as string)).toEqual(['email', 'display_name', 'password_hash']);
   });
 
   it('records field names only, never the values it erased', async () => {

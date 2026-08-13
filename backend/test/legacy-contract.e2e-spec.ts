@@ -80,12 +80,44 @@ describeWithDb('v1 legacy contract (e2e)', () => {
     await app.close();
   });
 
-  const pickStopId = async (index: number): Promise<string> => {
-    const stops = await request(app.getHttpServer())
-      .get('/api/v2/stops')
-      .set('Authorization', `Bearer ${v2Token}`)
-      .expect(200);
-    return stops.body.stops[index].id as string;
+  /**
+   * A stop from today's round that has no pod yet, and a different one on
+   * every call.
+   *
+   * This used to index into the day list, which only holds against a database
+   * nobody has ever posted to. `pods.stop_id` is unique, so on the second run
+   * of this suite against the same database the stop at index 10 already had
+   * a pod and returned 409 - and a fixture-exhaustion problem presented as
+   * "the frozen v1 contract is broken", which is the one failure that must
+   * never cry wolf.
+   *
+   * Claiming by absence of a pod, rather than by position, is also the
+   * precondition these tests actually depend on: 201-then-409 only means
+   * anything when the first POST is genuinely the first for that stop.
+   */
+  const claimedStopIds = new Set<string>();
+
+  const pickFreshStopId = async (): Promise<string> => {
+    const rows = (await dataSource.query(
+      `SELECT s.id
+         FROM stops s
+         LEFT JOIN pods p ON p.stop_id = s.id
+        WHERE s.driver_id = (SELECT id FROM drivers WHERE employee_ref = 'EMP-TEST-001')
+          AND s.created_at >= date_trunc('day', now())
+          AND p.id IS NULL
+        ORDER BY s.sequence
+        LIMIT 500`,
+    )) as Array<{ id: string }>;
+
+    const free = rows.find((row) => !claimedStopIds.has(row.id));
+    if (!free) {
+      throw new Error(
+        "today's round has no stop left without a pod: reseed, or roll the demo route forward",
+      );
+    }
+
+    claimedStopIds.add(free.id);
+    return free.id;
   };
 
   describe('POST /api/auth/login', () => {
@@ -191,7 +223,7 @@ describeWithDb('v1 legacy contract (e2e)', () => {
 
   describe('POST /api/stops/:id/pod', () => {
     it('returns 201 with the created pod, and v1 can read id and created_at', async () => {
-      const stopId = await pickStopId(10);
+      const stopId = await pickFreshStopId();
       const note = `handed to resident ${randomUUID()}`;
 
       const res = await request(app.getHttpServer())
@@ -225,7 +257,7 @@ describeWithDb('v1 legacy contract (e2e)', () => {
     });
 
     it('returns 409 on a duplicate submission for the same stop', async () => {
-      const stopId = await pickStopId(11);
+      const stopId = await pickFreshStopId();
       const body = { delivered: false, location: '51.5,-0.1', note: `no answer ${randomUUID()}` };
 
       await request(app.getHttpServer())
@@ -259,8 +291,8 @@ describeWithDb('v1 legacy contract (e2e)', () => {
         [{ delivered: false }, 'no_answer_carded'],
       ];
 
-      for (const [index, [body, expected]] of cases.entries()) {
-        const stopId = await pickStopId(20 + index);
+      for (const [body, expected] of cases) {
+        const stopId = await pickFreshStopId();
         const note = `mapping ${randomUUID()}`;
         await request(app.getHttpServer())
           .post(`/api/stops/${stopId}/pod`)
@@ -278,7 +310,7 @@ describeWithDb('v1 legacy contract (e2e)', () => {
     });
 
     it('does not claim complete evidence for a v1 payload that carried none', async () => {
-      const stopId = await pickStopId(25);
+      const stopId = await pickFreshStopId();
       const note = `no evidence ${randomUUID()}`;
 
       await request(app.getHttpServer())
@@ -297,7 +329,7 @@ describeWithDb('v1 legacy contract (e2e)', () => {
 
   describe('the pods projection v1 reads', () => {
     it('a v2 attempt projects into pods so v1 readers see the latest state', async () => {
-      const stopId = await pickStopId(12);
+      const stopId = await pickFreshStopId();
 
       await request(app.getHttpServer())
         .post('/api/v2/attempts')
@@ -322,7 +354,7 @@ describeWithDb('v1 legacy contract (e2e)', () => {
     });
 
     it('never moves a pod id or created_at once v1 has seen them', async () => {
-      const stopId = await pickStopId(13);
+      const stopId = await pickFreshStopId();
 
       // v1 records a delivery and reads back the pod identity it will keep.
       const first = await request(app.getHttpServer())

@@ -7,19 +7,16 @@
  * They are wired into `npm test` now, so the no-database case has to skip
  * rather than fail, and skip LOUDLY: a suite reporting zero tests is the same
  * silence we just removed. Reachability is probed once in global-setup.ts,
- * because DATABASE_URL is always set here whether or not anything is listening.
+ * which also loads .env, because DATABASE_URL being unset is itself a skip
+ * reason and one that used to be indistinguishable from a missing database.
+ *
+ * The warning is printed by global-setup.ts, not here. Jest attaches console
+ * output to a running test, so a warning emitted at module scope by a suite
+ * that then skips is swallowed - which is precisely how this skip went silent
+ * while looking like it was covered.
  */
 const reachable = process.env.E2E_DB_REACHABLE === '1';
 
 export const describeWithDb: jest.Describe = reachable
   ? describe
   : (describe.skip as jest.Describe);
-
-if (!reachable) {
-  // eslint-disable-next-line no-console
-  console.warn(
-    `\n  e2e SKIPPED: ${process.env.E2E_DB_REASON || 'no database'}.\n` +
-      '  These pin the frozen v1 contract. To run them:\n' +
-      '    docker compose -f ../infra/docker-compose.dev.yml up -d && npm run seed\n',
-  );
-}

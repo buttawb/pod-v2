@@ -36,13 +36,17 @@ for.
 Holding proof of delivery rests on legitimate interest: defending customer
 disputes and insurance claims, and performing the delivery contract.
 
-**Retention is 18 months**, which covers the practical courier claims window.
+**Retention is six years.** That is the limitation period for contract
+claims in England and Wales, and it contains the practical courier claims
+window with room to spare. An earlier draft of this file said 18 months,
+which was an assumption about the claims window rather than a decision
+about the legal obligation; the obligation is what governs.
 
-*Implemented today:* an S3 lifecycle rule expires evidence objects at 550
-days and their non-current versions 30 days after they are superseded, so
-destruction happens declaratively in infrastructure and does not depend on
-any application process running. Terraform:
-`infra/terraform/modules/storage/main.tf`.
+*Implemented today:* an S3 lifecycle rule expires evidence objects at 2192
+days, which is six years plus two leap days, and their non-current versions
+30 days after they are superseded, so destruction happens declaratively in
+infrastructure and does not depend on any application process running.
+Terraform: `infra/terraform/modules/storage/main.tf`.
 
 *Specified but not yet built:* the database-side redaction that would null
 free-text and neighbour fields, truncate GPS to two decimal places, and

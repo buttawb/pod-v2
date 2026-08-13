@@ -143,10 +143,25 @@ export class StopsService {
     let where = day;
 
     if (bbox) {
-      // Served by the GiST index on point(lng, lat).
+      /**
+       * Geometric, so the GiST index can actually serve it.
+       *
+       * This was `lng BETWEEN ... AND lat BETWEEN ...` under a comment
+       * claiming the index served it. It did not: idx_stops_geo is on the
+       * expression `point(lng, lat)`, and Postgres cannot reach an expression
+       * index through scalar comparisons on the underlying columns, so the
+       * planner fell back to a sequential scan and only the day predicate was
+       * keeping it cheap.
+       *
+       * Measured on 5,000 stops in one day: seq scan 13.3ms / 309 buffers
+       * against a bitmap index scan at 2.3ms / 260 buffers. The two predicates
+       * were diffed across six viewports, including a degenerate single point
+       * and a whole-world box, and return identical id sets - `<@` and BETWEEN
+       * are both inclusive of their edges.
+       */
       params.push(bbox.minLng, bbox.minLat, bbox.maxLng, bbox.maxLat);
-      where += ` AND lng BETWEEN $${params.length - 3} AND $${params.length - 1}
-                 AND lat BETWEEN $${params.length - 2} AND $${params.length}`;
+      where += ` AND point(lng, lat) <@ box(point($${params.length - 3}, $${params.length - 2}),
+                                            point($${params.length - 1}, $${params.length}))`;
     }
 
     if (status?.length) {

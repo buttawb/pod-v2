@@ -35,19 +35,39 @@ all from the same-region runner.
 Per-endpoint at the 25/s baseline: attempt submit p95 **14.2ms**, presign p95
 **7.8ms**. Checks passed 9,035 out of 9,035.
 
-**Zero HTTP errors at every level, including saturation.** The service queues
-rather than sheds: latency degrades smoothly and requests still succeed. That
-is the right failure mode for a courier app whose alternative is a driver
-losing evidence, and it is why the open-model executor matters - a closed
-model would have quietly slowed its own request rate and hidden the knee.
+**Zero HTTP errors at every level, including saturation.** Every request the
+server was asked to answer, it answered. Latency degrades smoothly rather than
+tipping into errors, which is the right failure mode for a courier app whose
+alternative is a driver losing evidence.
+
+Two things are true at saturation and they are worth separating, because
+conflating them would overstate the result. The server shed no *requests*: the
+error rate is 0% at 150/s just as it is at 25/s. But a third of the offered
+*work* never became a request at all - 3,766 of roughly 11,500 iterations were
+dropped by the generator, which in a constant-arrival-rate executor means it
+could not allocate a VU in time because responses were taking 5.6s. So the
+honest reading is: it queues rather than erroring, and past the knee the queue
+grows faster than it drains. Work is still lost, just upstream of the server
+and visibly rather than silently.
+
+That distinction is why the open-model executor matters. A closed model would
+have quietly slowed its own request rate to match the server, reported the
+same zero errors, and hidden both the knee and the shed work.
 
 ## What this says about 3,000 drivers
 
 | Quantity | Value |
 |---|---|
 | Required steady state (from the brief's numbers) | ~115 rps |
-| One instance sustains comfortably | ~142 rps |
-| One instance saturates around | ~200 rps |
+| One instance stays flat to | ~95 rps (p95 13.3ms) |
+| Knee begins at | ~142 rps (p95 43ms) |
+| One instance saturates around | ~200 rps (p95 5.6s) |
+
+Note where ~115 rps falls: above the flat region and inside the knee, not
+below both. Interpolating between the 95 and 142 rps rows puts p95 near
+25-30ms at the required steady state, which is comfortable in absolute terms
+for this workload. The fleet does fit on one instance; it does not fit in the
+flat part of the curve, and those are different claims.
 
 So the entire 3,000-driver steady state fits on a single `t3.small` with
 headroom to spare. The morning burst (~400-500 rps) needs roughly three to

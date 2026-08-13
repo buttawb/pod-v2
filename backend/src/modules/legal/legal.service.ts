@@ -1,5 +1,7 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
+import { hash } from 'bcryptjs';
+import { randomBytes } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { RefreshTokenStatus } from '../auth/entities/refresh-token.entity';
 
@@ -20,8 +22,13 @@ export type SubjectType = (typeof SubjectType)[keyof typeof SubjectType];
  *
  * `employee_ref` is not on this list: it is the payroll key that ties an
  * attempt to the person who made it, so clearing it would break the
- * attribution of evidence we are required to keep. `password_hash` is not
- * either; the token revocation below is what ends access.
+ * attribution of evidence we are required to keep.
+ *
+ * `password_hash` is not on this list either, but it IS overwritten, in
+ * `erase()` below. It is handled separately because it is not a contact field
+ * being cleared for privacy; it is the credential, and overwriting it is what
+ * actually ends access. It needs an async hash rather than a literal, which
+ * this table of pure functions cannot express.
  *
  * NULL is the honest erasure and is used wherever the column permits it.
  * `display_name` is NOT NULL on both tables and `office_users.email` is both
@@ -114,7 +121,9 @@ export class LegalService {
     if (!spec) throw new BadRequestException('Unknown subject type');
 
     return this.dataSource.transaction(async (em) => {
-      const fieldNames = spec.columns.map((c) => c.column);
+      // password_hash is reported alongside the contact columns because the
+      // audit answer to "what was cleared" has to include the credential.
+      const fieldNames = [...spec.columns.map((c) => c.column), 'password_hash'];
 
       const [subject] = (await em.query(
         `SELECT id FROM ${spec.table} WHERE id = $1 FOR UPDATE`,
@@ -128,6 +137,28 @@ export class LegalService {
       await em.query(`UPDATE ${spec.table} SET ${setters} WHERE id = $1`, [
         subjectId,
         ...spec.columns.map((c) => c.value(subjectId)),
+      ]);
+
+      /**
+       * Access ends here, not at the token revocation below.
+       *
+       * Revoking refresh tokens closes the sessions that exist, and that used
+       * to be the whole story. It was not enough: the credential survived, so
+       * an erased subject could sign in again seconds later and mint a fresh
+       * token family, which makes "erased" mean no more than "logged out".
+       * There is no other deactivation path in the API, so this is the only
+       * place that can end access.
+       *
+       * Overwritten with a real bcrypt hash of 32 random bytes rather than a
+       * sentinel string. The column is NOT NULL and every read path expects a
+       * well-formed hash, and a merely malformed value would depend on the
+       * comparison library choosing to return false rather than throw. Nothing
+       * anywhere holds the random secret, so no input can match it.
+       */
+      const unusableHash = await hash(randomBytes(32).toString('hex'), 10);
+      await em.query(`UPDATE ${spec.table} SET password_hash = $2 WHERE id = $1`, [
+        subjectId,
+        unusableHash,
       ]);
 
       const column = subjectType === SubjectType.Driver ? 'driver_id' : 'office_user_id';
