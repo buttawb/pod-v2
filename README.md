@@ -69,7 +69,7 @@ TOKEN=$(curl -sS -X POST https://18.139.240.68.sslip.io/api/auth/login -H 'Conte
 ```
 
 ```bash
-curl -sS -o /dev/null -w '%{http_code}\n' -X POST "https://18.139.240.68.sslip.io/api/stops/$STOP_ID/pod" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"delivered":true,"note":"hand check"}'
+STOP_ID=$(curl -sS https://18.139.240.68.sslip.io/api/stops -H "Authorization: Bearer $TOKEN" | python3 -c 'import sys,json;print(next(s["id"] for s in json.load(sys.stdin) if not s["pod"]))') && for n in 1 2; do curl -sS -o /dev/null -w "$n -> %{http_code}\n" -X POST "https://18.139.240.68.sslip.io/api/stops/$STOP_ID/pod" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"delivered":true,"note":"hand check"}'; done
 ```
 
 The first returns exactly `{"token":"..."}` and nothing else. The second returns
