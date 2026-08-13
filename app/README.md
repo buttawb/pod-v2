@@ -4,9 +4,9 @@ Android app (React Native / Expo) for couriers: work today's stop list,
 capture proof-of-delivery evidence offline, and reconcile with the server when
 signal returns.
 
-Backend, infrastructure and the design write-up live in
-**[pod-v2-backend](https://github.com/buttawb/pod-v2-backend)** (see its
-`DECISIONS.md`).
+Backend, infrastructure and the design write-up are in this same repository:
+[`../backend`](../backend), [`../infra`](../infra) and
+[`../DECISIONS.md`](../DECISIONS.md).
 
 | | |
 |---|---|
@@ -47,7 +47,7 @@ src/
 ```
 
 Run `npm test` for the sync-engine, evidence-matrix, badge-honesty and
-version-gate suites (75 tests, no device required).
+version-gate suites: 183 tests across 14 suites, no device required.
 
 ## Build
 
@@ -105,15 +105,18 @@ would block the wrong builds from capturing evidence.
 
 ## Depot map performance
 
-The map ships three render modes so before and after can be measured on the
-same scripted camera tour rather than estimated:
+The map ships both architectures so before and after can be measured on the
+same scripted camera tour, on the same build, rather than estimated. They are
+switched by a button on the map itself, not by a build flag: a comparison that
+needs two builds is a comparison of two builds.
+
+- **Legacy** — ask for every stop the depot owns, once, and cluster on device.
+- **Viewport** — send the rectangle and the zoom, aggregate in Postgres, render
+  in GPU style layers. This is what ships.
 
 ```bash
-EXPO_PUBLIC_RENDER_MODE=markers|symbols|clustered npx expo run:android --variant release
 adb shell dumpsys gfxinfo com.podv2.driver reset
-# run the in-app camera tour, then
+# toggle the mode on the map, run the in-app camera tour, then
 adb shell dumpsys gfxinfo com.podv2.driver
+adb shell dumpsys meminfo com.podv2.driver
 ```
-
-`markers` is the naive baseline (one native view per stop), `symbols` an
-unclustered GPU layer, and `clustered` what ships.

@@ -2,7 +2,7 @@
 
 Generated from the live database rather than from the migrations, so this is
 what is actually there rather than what was intended. The device schema is read
-from pod-v2-app/src/db/schema.ts.
+from app/src/db/schema.ts.
 
 ## PostgreSQL (12 tables, the TypeORM migrations table omitted)
 
