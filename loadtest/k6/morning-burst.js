@@ -40,9 +40,36 @@ export const options = {
   },
 };
 
+/**
+ * One sign-in per VU, held for the run.
+ *
+ * This used to sign in on every iteration, with a fresh deviceFingerprint each
+ * time. Two things followed, and together they made the scenario measure the
+ * wrong system entirely. Rate limiting is per identity, so 300 VUs spread over
+ * 33 drivers re-authenticating every second or two tripped the throttler within
+ * moments; and a failed login returned immediately with no sleep, so the VU
+ * looped straight back and hammered it. A 75-second run produced 575,505 failed
+ * logins and 20 successful ones: a load test of the login limiter.
+ *
+ * A real morning is one sign-in per driver and then a day of work, which is
+ * what this now models. The token is module scope keyed by VU because k6 gives
+ * each VU its own JS runtime, so there is no sharing between them.
+ */
+const tokenByVu = {};
+
 export default function morningBurst() {
-  const token = login(`${__VU}-${__ITER}`, driverFor(__VU));
-  if (!token) return;
+  if (!tokenByVu[__VU]) {
+    // Stable per VU: a new fingerprint every iteration also created a device
+    // row per iteration, which is not a thing any handset does.
+    tokenByVu[__VU] = login(`vu-${__VU}`, driverFor(__VU));
+  }
+  const token = tokenByVu[__VU];
+  if (!token) {
+    // Back off instead of spinning. Without this a VU that cannot sign in
+    // becomes an unthrottled retry loop and the run measures that loop.
+    sleep(5);
+    return;
+  }
 
   const stopsResponse = http.get(
     `${BASE_URL}/api/v2/stops`,
