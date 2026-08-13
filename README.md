@@ -17,6 +17,12 @@ handsets cannot be updated. Two repositories:
 | Karachi round | `EMP-PK-001` / `TestDriver#2026` (320-stop depot, 40-stop round) |
 | Office login | `office@demo.pod` / `OfficeDemo#2026` |
 
+A driver's round is today's work, selected on `created_at >= date_trunc('day',
+now())`, so seeded data would otherwise expire at UTC midnight and these logins
+would open on an empty day. A systemd timer on the instance rolls the round
+forward at 00:05 UTC, shifting stops only: evidence is append-only and keeps its
+original timestamps, so a pod that predates its rolled stop is expected.
+
 ## Run it locally
 
 ```bash
