@@ -253,9 +253,49 @@ adb shell dumpsys meminfo com.podv2.driver
 | Model | `23106RN0DA` | `SM-S721B` |
 | Android | 15 (SDK 35) | 16 |
 | Chipset | MediaTek Helio G85 (MT6769V/CZ) | to follow |
-| RAM | 5,797,220 kB | to follow |
+| RAM | 5,797,220 kB (5.5 GiB) | to follow |
 | Screen | 720x1600 @ 320 dpi | to follow |
-| Depot map p95 frame time | pending | to follow |
-| Depot map jank | pending | to follow |
-| PSS | pending | to follow |
-| Cold map open | pending | to follow |
+| Depot map p50 frame time | **6 ms** / 6 ms | to follow |
+| Depot map p90 frame time | 8 ms / 8 ms | to follow |
+| Depot map p95 frame time | **9 ms** / 9 ms | to follow |
+| Depot map p99 frame time | 16 ms / 18 ms | to follow |
+| Janky frames | **0.76%** / 1.51% | to follow |
+| Janky frames (legacy metric) | 3.04% / 2.59% | to follow |
+| Missed vsync | 0 / 0 | to follow |
+| GPU p95 | 2 ms | to follow |
+| Frames rendered | 526 / 464 | to follow |
+| PSS after tour | **291 MB** / 330 MB | to follow |
+| RSS after tour | 450 MB / 490 MB | to follow |
+| PSS at sign-in, before any map | 119 MB | to follow |
+
+Two runs of the same scripted tour, reported as `run 1 / run 2`.
+
+**The budget phone holds 60 fps.** The frame budget at 60 Hz is 16.7 ms and the
+p95 is 9 ms, with zero missed vsyncs across 990 frames. That is a MediaTek Helio
+G85 rendering the depot map while the API behind it answers from a 20 million
+row table.
+
+Worth noting against the earlier Samsung S24 FE figures in DECISIONS.md (p95
+7 ms, jank 1.1 to 2.5%, 465 to 479 MB PSS): the low end phone shows *lower* jank
+and *less* memory. That is not the budget device outperforming the flagship. It
+is a 720x1600 screen having roughly a third of the pixels to push and a smaller
+tile cache to hold, which is exactly why both numbers are reported rather than
+one being taken as the device story.
+
+PSS grew 291 MB to 330 MB between the two runs, which is map tile cache filling
+and is expected.
+
+### Functional checks on the low end device
+
+| # | Check | Result | Evidence |
+|---|---|---|---|
+| 1 | Install release APK 2.0.0 | PASS | `adb install` Success after enabling MIUI "Install via USB" |
+| 2 | Cold launch to sign-in | PASS | renders in under 12 s, version 2.0.0 shown |
+| 3 | Sign in against the 20M backend | PASS | list reads "42 of 151 done, 109 left", matching the server exactly |
+| 4 | Depot map opens and draws pins | PASS | opens on current location (Karachi), status filter chips present |
+| 5 | **Cold start fully offline** | **PASS** | wifi and data disabled, `ping` reports network unreachable, app cold-launches and renders the full 151 stop day from device storage with an explicit Offline banner |
+
+The remaining functional items in the device plan (the six outcomes and their
+evidence rules, the photo cap, barcode mismatch, force quit mid capture and mid
+submit, retry backoff, live status) were not run in this pass and are not
+claimed.
