@@ -2,9 +2,14 @@
 
 Measured 2026-08-11 against the deployed stack.
 
-**Target:** one `t3.small` (2 vCPU, 2 GB) running two API containers, Postgres,
-and Caddy, all co-located. **Generator:** a separate `t3.medium` in the same
-region, provisioned by the same Terraform (`enable_loadtest_runner`).
+**Target:** one `t3.small` (2 vCPU, 2 GB) running two API containers and Caddy,
+with the database on the same box at the time of this run. **Generator:** a
+separate `t3.medium` in the same region, provisioned by the same Terraform
+(`enable_loadtest_runner`).
+
+> These numbers describe a smaller database on a different topology and are kept
+> for the capacity arithmetic they support. The measurements that describe the
+> deployed system are in "At 20 million rows" below.
 
 Each iteration is a real attempt submission plus an upload-URL request, so
 **1 iteration = 2 HTTP requests**.
@@ -94,3 +99,163 @@ from the handset to S3 on presigned URLs - the API only signs and verifies.
 - Rate limiting is tracked per authenticated identity, so the generator
   spreads across all 33 seeded drivers. A single-token run measures the
   rate limiter, not capacity - which is exactly what the first attempt did.
+
+---
+
+# At 20 million rows
+
+Measured 2026-08-14 against the deployed system after loading a synthetic
+history. Every number below comes from a command that was run; anything
+reasoned rather than measured says so.
+
+**Serving database:** Aurora PostgreSQL 16.14.0 Serverless v2 (0.5 to 16 ACU),
+`ap-southeast-1`, on Graviton. **API:** unchanged, one `t3.small` running Caddy
+and two API containers. The database is not on that box.
+
+| Table | Rows | Total | Heap | Indexes |
+|---|---|---|---|---|
+| `delivery_attempts` | 20,050,681 | 11 GB | 5,226 MB | 5,827 MB |
+| `stops` | 14,008,320 | 12 GB | 4,440 MB | 7,698 MB |
+| `attempt_photos` | 50,549 | 13 MB | 8,760 kB | 4,576 kB |
+
+Index sizes on the two large tables. The two 8 kB entries are partial indexes,
+which is the `WHERE` clause doing its job rather than an error:
+
+| Index | Size |
+|---|---|
+| `idx_stops_driver_updated` | 2,504 MB |
+| `idx_stops_geo` (GiST) | 1,959 MB |
+| `idx_stops_created_at` | 1,413 MB |
+| `idx_attempts_stop` | 1,392 MB |
+| `idx_attempts_driver_updated` | 1,356 MB |
+| `delivery_attempts_pkey` | 1,085 MB |
+| `uq_attempts_client_attempt_id` | 1,085 MB |
+| `idx_stops_driver_day` | 1,063 MB |
+| `idx_attempts_received_keyset` | 909 MB |
+| `stops_pkey` | 759 MB |
+| `idx_attempts_conflict` (partial) | 8,192 bytes |
+| `idx_attempts_retry_today` (partial) | 8,192 bytes |
+
+## Endpoint latency
+
+Measured over 12 calls each, from a laptop in Karachi against Singapore. **The
+network and TLS baseline is 325 ms p50** (`/api/health`, which does no database
+work), so subtract that to read server time. The absolute numbers are dominated
+by intercontinental round trip and are not a server measurement.
+
+| Endpoint | Surface | p50 | p95 | Server time, approx |
+|---|---|---|---|---|
+| `GET /api/v2/stops` | v2 | 539.5 ms | 590.7 ms | ~214 ms |
+| `GET /api/v2/stops/{id}` | v2 | 288.7 ms | 405.1 ms | ~0 ms |
+| `GET /api/v2/sync` | v2 | 761.9 ms | 1057.9 ms | ~437 ms |
+| `GET /api/v2/depot/stops.geojson` | v2 | 579.2 ms | 634.9 ms | ~254 ms |
+| `GET /api/v2/office/attempts` | v2 office | 386.0 ms | 444.4 ms | ~61 ms |
+| `GET /api/v2/office/stats` | v2 office | 360.4 ms | 438.8 ms | ~35 ms |
+| `GET /api/v2/office/conflicts` | v2 office | 319.1 ms | 359.2 ms | ~0 ms |
+| `GET /api/v2/conflicts` | v2 | 310.4 ms | 354.8 ms | ~0 ms |
+| `GET /api/stops` | v1 frozen | 609.3 ms | 708.6 ms | ~284 ms |
+
+## Query plans
+
+`EXPLAIN (ANALYZE, BUFFERS)` against the 20M table. Every read stayed a
+selective index lookup; none turned into a sequential scan.
+
+| Read | Plan | Time | Buffers |
+|---|---|---|---|
+| Driver's round for today | Index Scan `idx_stops_driver_day` | 0.298 ms | 152 |
+| Attempts for one stop | Index Scan `idx_attempts_stop` | 1.455 ms | 8 |
+| Office keyset page, first | Index Scan `idx_attempts_received_keyset` | 1.597 ms | 53 |
+| Office keyset page, 10M deep | Index Scan `idx_attempts_received_keyset` | 0.173 ms | 53 |
+| Conflicts list | Index Scan `idx_attempts_conflict` (partial) | 0.016 ms | 1 |
+| Latest attempt per stop | Index Scan `idx_attempts_stop` + top-N heapsort | 1.034 ms | 21 |
+| Dashboard stats, stops today | Index Only Scan `idx_stops_created_at` | 5.3 ms | 10,474 |
+
+The office keyset page shows **no Incremental Sort**, which is what migration
+`1755000000013-AttemptsReceivedTieOrder` was for: the index tie-order
+`(received_at DESC, id DESC)` matches the cursor comparison exactly. Confirmed
+still true at 20 million.
+
+## Cursor pagination, deep and random
+
+Keyset pagination pages from a cursor rather than jumping to a page number, so
+it was tested by sampling cursors at increasing depth through the full 20
+million and paging from each.
+
+| Cursor position | Page time |
+|---|---|
+| First page, newest, no cursor | 2.366 ms |
+| 1,000,000 rows deep | 0.680 ms |
+| 5,000,000 rows deep | 0.447 ms |
+| 10,000,000 rows deep | 0.423 ms |
+| 15,000,000 rows deep | 0.385 ms |
+| 19,000,000 rows deep | 0.379 ms |
+
+**Flat, and the deep pages are faster than the first**, because the first page
+pays query planning and colder buffers while the rest hit a warm index. Depth
+costs nothing: the tuple comparison `(received_at, id) < ($1, $2)` becomes an
+index bound rather than a filter, so the scan starts at the cursor instead of
+counting up to it.
+
+For contrast, building those cursors with `OFFSET` took **25,017 ms**, because
+`OFFSET` reads and discards every row it skips. That is the cost keyset
+pagination exists to avoid, and it is why the office lists do not offer a page
+number.
+
+**No `OFFSET` in any list read.** Verified by grep across `backend/src/modules`:
+zero occurrences of `OFFSET`, `.offset(`, or `skip(` outside tests.
+
+## Two things investigated
+
+**The depot map looked like a hang, and was not.** The first sweep recorded p95
+**30,005 ms**, which was the 30 second client timeout. Over 25 further calls:
+p50 579.2 ms, p95 634.9 ms, max 638.8 ms, **zero calls over 2 seconds**. It was
+a single cold-start outlier on the first request after a deploy: new containers,
+an empty connection pool, and cold buffers on a 1,959 MB GiST index. The index
+is genuinely used: `idx_stops_geo` went from 0 to 42 scans across these calls.
+Reasoned, not proven: the cold path is the explanation that fits, but it was not
+reproduced deliberately.
+
+**The dashboard stats query does not reach zero heap fetches.** It uses
+`Index Only Scan using idx_stops_created_at` as intended, but reports
+**Heap Fetches: 5,076** for 10,715 rows. One fix was attempted, a
+`VACUUM (ANALYZE) stops`, which moved it from 5,107 to 5,076: no change worth
+the name. It was not pursued further.
+
+The explanation is that those rows are today's stops, which are the rows the
+demo roll and the round reset had just written. A visibility map cannot mark
+pages all-visible while their tuples are still that new, so the heap check is
+unavoidable for hot rows and no index change removes it. At 5.3 ms across a
+14M-row table this is not a problem, and it is recorded here because the
+prediction was zero and the measurement was not.
+
+**No migration was shipped.** Nothing found met the bar for one.
+
+## Next lever, if this grows again
+
+Range partition `delivery_attempts` by month on `received_at`. The keyset reads
+already only touch the newest partition, so pruning would cut index size per
+query rather than change the access pattern. Not needed at 20 million: the
+measurements above show no depth penalty and no sequential scans.
+
+## Device performance
+
+Capture commands, so the two passes are identical:
+
+```bash
+adb shell dumpsys gfxinfo com.podv2.driver reset
+# drive the scripted camera tour, then:
+adb shell dumpsys gfxinfo com.podv2.driver framestats
+adb shell dumpsys meminfo com.podv2.driver
+```
+
+| | Low end: Xiaomi Redmi 13C | Flagship: Samsung S24 FE |
+|---|---|---|
+| Model | `23106RN0DA` | `SM-S721B` |
+| Android | 15 (SDK 35) | 16 |
+| Chipset | MediaTek Helio G85 (MT6769V/CZ) | to follow |
+| RAM | 5,797,220 kB | to follow |
+| Screen | 720x1600 @ 320 dpi | to follow |
+| Depot map p95 frame time | pending | to follow |
+| Depot map jank | pending | to follow |
+| PSS | pending | to follow |
+| Cold map open | pending | to follow |
