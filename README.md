@@ -102,11 +102,20 @@ down.
 
 One `t3.small` in `ap-southeast-1` runs Caddy in front of two API instances, so
 idempotency and SSE fan-out are exercised across instances rather than only
-designed for. The database is an Aurora PostgreSQL Serverless v2 cluster in
-private subnets, reachable only from the API host's security group, encrypted at
-rest with automated backups. Evidence photographs live in a private S3 bucket
-that the API never proxies: the attempt POST returns presigned links, the bytes
-go straight to S3, and the server verifies each object afterwards.
+designed for. The database is an Aurora PostgreSQL Serverless v2 cluster on its
+own subnets, encrypted at rest with automated backups. The instance stores
+nothing, which is what makes it disposable. Evidence photographs live in a
+private S3 bucket that the API never proxies: the attempt POST returns presigned
+links, the bytes go straight to S3, and the server verifies each object
+afterwards.
+
+**The database is currently reachable from the internet on 5432, deliberately,
+so the schema can be opened in a SQL client during review.** That is a demo
+decision and a bad default: it is a real database behind one password. The
+design position is the opposite, and reverting to it is three lines in
+`infra/terraform/modules/database/main.tf`: drop the `aws_route.db_igw` route,
+set `publicly_accessible = false`, and restore the security group's single
+ingress rule limiting 5432 to the API host's security group.
 
 `infra/terraform` provisions it and `infra/deploy.sh` ships a release.
 

@@ -84,7 +84,7 @@ Depot map: the old design sent all ~5,000 stops (~850KB) and grouped them on the
 
 **Photos first**, projected rather than measured: signed links minted one at a time, and storage write limits per key path. Fix: batch the links, spread the keys, verify in background workers. **v1's full-history endpoint second:** unbounded by design for byte-compatibility, so statement timeouts are the first fix and retiring v1 is the real one. **Conflict review third:** the flag scales, the human process needs triage tools. **The pods summary:** a background job, or it dies with v1. **Not Postgres:** append-only inserts scale; split the table by month.
 
-**The database is not on the app box**, so the obvious first ceiling is already gone: it is an Aurora Serverless v2 cluster in private subnets, scaling on its own and backed up without anyone remembering to. The instance stores nothing and is disposable.
+**The database is not on the app box**, so the obvious first ceiling is already gone: it is an Aurora Serverless v2 cluster on its own subnets, scaling on its own and backed up without anyone remembering. The instance stores nothing and is disposable.
 
 ## Deliberately not built, and assumptions
 

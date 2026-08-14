@@ -162,7 +162,14 @@ data "aws_availability_zones" "available" {
 }
 
 # ---------------------------------------------------------------------------
-# Private subnets. The default VPC has none, so build them.
+# Dedicated subnets for the database. The default VPC ships only public ones,
+# and a database sharing a subnet with everything else has its reachability
+# decided somewhere other than here.
+#
+# They are named private and are currently NOT private: aws_route.db_igw below
+# gives them a way out, on purpose, so the schema can be opened from a SQL
+# client during review. The name is kept because it describes the intended
+# state, and the route is the one thing standing between the two.
 # ---------------------------------------------------------------------------
 
 resource "aws_subnet" "private" {
@@ -181,18 +188,41 @@ resource "aws_subnet" "private" {
   }
 }
 
-# This route table is what actually makes those subnets private. It has no
-# route block, which leaves it with only the VPC-local route AWS adds
-# implicitly: no internet gateway, no NAT, no path off the VPC in either
-# direction. Without it the subnets would fall back to the default VPC's main
-# route table, which does carry 0.0.0.0/0 to the IGW, and "private subnet"
-# would be a comment rather than a fact.
+# This route table is what decides whether those subnets are private. Declared
+# with no inline route, it carries only the VPC-local route AWS adds implicitly,
+# and the subnets are then unreachable from outside the VPC. That matters
+# because without an explicit table they would fall back to the default VPC's
+# main table, which does carry 0.0.0.0/0 to the internet gateway.
+#
+# aws_route.db_igw immediately below then adds that route back, which is the
+# single line that makes the cluster internet-facing. Deleting it is the whole
+# revert.
 resource "aws_route_table" "private" {
   vpc_id = data.aws_vpc.default.id
 
   tags = {
     Name = "${var.name_prefix}-rt-db-private"
   }
+}
+
+# THE LINE THAT PUTS THE DATABASE ON THE INTERNET.
+#
+# Added for the review, so the schema can be opened in a SQL client from any
+# network without an SSH tunnel or a VPN. Combined with publicly_accessible on
+# the instance and the 0.0.0.0/0 rule in the security group below, it leaves a
+# database holding driver password hashes reachable from anywhere, protected by
+# one generated password and no TLS requirement.
+#
+# That is a demo decision with a deadline behind it, not a recommendation.
+# Deleting this resource is most of the revert, and the other two halves are
+# marked with the same words.
+resource "aws_route" "db_igw" {
+  route_table_id         = aws_route_table.private.id
+  destination_cidr_block = "0.0.0.0/0"
+
+  # Hardcoded because the default VPC's gateway is not managed here and this
+  # resource is expected to be short-lived. A data source would outlive it.
+  gateway_id = "igw-0083f6bddd9dbacfa"
 }
 
 resource "aws_route_table_association" "private" {
@@ -217,19 +247,39 @@ resource "aws_db_subnet_group" "aurora" {
 # ---------------------------------------------------------------------------
 
 resource "aws_security_group" "aurora" {
-  name        = "${var.name_prefix}-sg-aurora"
+  name = "${var.name_prefix}-sg-aurora"
+
+  # STALE ON PURPOSE, and the rule below is the truth. A security group
+  # description is immutable in AWS, so editing this string does not update
+  # anything: it forces Terraform to destroy and recreate the group, which means
+  # detaching and reattaching it on a live database to correct a sentence. The
+  # accurate statement lives in the comment on the ingress rule instead, where it
+  # costs nothing. Worth fixing when the demo access is reverted and the group is
+  # being changed anyway.
   description = "pod-v2 Aurora: 5432 from the API host security group only"
   vpc_id      = data.aws_vpc.default.id
 
-  # Referenced by group, not by CIDR. The API host sits on an EIP today and a
-  # rebuilt box gets a new address, so a CIDR rule would be a rule that breaks
-  # on the next replace. A group reference survives it.
+  # OPEN TO THE INTERNET, for the review. See aws_route.db_igw above.
+  #
+  # The rule this replaced referenced var.app_security_group_id instead of a
+  # CIDR, which is the form worth going back to: the API host sits on an EIP
+  # today and a rebuilt box gets a new address, so a CIDR rule for it would
+  # break on the next replace while a group reference survives it. Restoring
+  # that one rule, and dropping this one, is the second half of the revert:
+  #
+  #   ingress {
+  #     description     = "postgres from the API host only"
+  #     from_port       = 5432
+  #     to_port         = 5432
+  #     protocol        = "tcp"
+  #     security_groups = [var.app_security_group_id]
+  #   }
   ingress {
-    description     = "postgres from the API host only"
-    from_port       = 5432
-    to_port         = 5432
-    protocol        = "tcp"
-    security_groups = [var.app_security_group_id]
+    description = "postgres from anywhere, for the demo walkthrough"
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   # No egress block, and that is the point: Terraform revokes the default
@@ -305,10 +355,11 @@ resource "aws_rds_cluster_instance" "writer" {
   engine_version     = aws_rds_cluster.pod.engine_version
   instance_class     = "db.serverless"
 
-  # The subnets have no route to an internet gateway, so this is already true
-  # in practice. Stating it means the guarantee does not depend on nobody ever
-  # editing that route table.
-  publicly_accessible = false
+  # Gives the instance a public address, for the review. See aws_route.db_igw.
+  # This is the third of the three settings that have to agree before anything
+  # outside the VPC can connect, and setting it back to false is the last part
+  # of the revert.
+  publicly_accessible = true
 
   # Free tier, 7 day retention. "The API feels slow" needs an answer better than
   # a shrug, and top SQL by wait event is that answer.
