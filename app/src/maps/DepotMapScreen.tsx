@@ -56,6 +56,16 @@ const STATUS_PARAM: Record<StatusCode, string> = {
   [StatusCode.Failed]: 'failed',
 };
 
+/**
+ * The zoom at which the server stops aggregating and returns individual stops.
+ *
+ * Mirrors StopsService.POINT_ZOOM on the backend. Duplicated rather than shared
+ * because there is no module both sides import, and wrong here is visible
+ * immediately: too low and tapping a cluster lands on counts with no pins, too
+ * high and it lands on empty ground between them.
+ */
+const POINT_ZOOM = 13;
+
 /** Panning fires continuously; only the settled viewport is worth a request. */
 const SETTLE_MS = 350;
 
@@ -269,7 +279,24 @@ export function DepotMapScreen({
 
       if (props.point_count !== undefined) {
         const zoom = viewport.current?.zoom ?? DEPOT_ZOOM;
-        cameraRef.current?.easeTo({ center: [lng, lat], zoom: Math.min(zoom + 2, 16), duration: 400 });
+        // Never drill past the zoom where the server starts returning real
+        // stops, because a cluster's coordinate is not one.
+        //
+        // It is the centre of an aggregation cell, and the stops it counts are
+        // scattered across that cell rather than sitting at its middle. Zooming
+        // to 16 on it, as this did, put a few-hundred-metre viewport around a
+        // point where nothing is: the counts stepped down 475, 200, 50 and then
+        // the map went empty, which reads as the data disappearing.
+        //
+        // Stopping at the point threshold means the last tap always lands on a
+        // viewport wide enough to hold what the cluster was counting. Past that
+        // the driver pans, and a viewport they navigated to by hand always has
+        // something in it.
+        cameraRef.current?.easeTo({
+          center: [lng, lat],
+          zoom: Math.min(zoom + 2, POINT_ZOOM),
+          duration: 400,
+        });
         return;
       }
       if (!props.id) return;
