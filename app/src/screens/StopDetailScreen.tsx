@@ -210,7 +210,15 @@ export function StopDetailScreen({
             <Card
               key={attempt.client_attempt_id}
               style={styles.attemptCard}
-              onPress={() => details.open(attempt.client_attempt_id)}
+              // Only rows this device holds open the detail sheet. That sheet
+              // reads photographs, GPS and error history out of local storage,
+              // and a row captured on another handset has none of that here, so
+              // tapping it reported "no longer on this device" about an attempt
+              // that plainly exists. Saying where it lives is the honest answer;
+              // opening an empty sheet is not.
+              onPress={
+                attempt.remote ? undefined : () => details.open(attempt.client_attempt_id)
+              }
             >
               <View style={styles.attemptRow}>
                 <View style={styles.attemptDetails}>
@@ -218,7 +226,9 @@ export function StopDetailScreen({
                     {attempt.outcome ? OUTCOME_SPECS[attempt.outcome].label : 'Unknown'}
                   </Text>
                   <Text style={type.meta}>
-                    Attempt {attempt.attempt_no}  ·  {formatTime(attempt.captured_at)}
+                    {attempt.remote
+                      ? `Captured on another device  ·  ${formatTime(attempt.captured_at)}`
+                      : `Attempt ${attempt.attempt_no}  ·  ${formatTime(attempt.captured_at)}`}
                   </Text>
                 </View>
                 <SyncBadge
