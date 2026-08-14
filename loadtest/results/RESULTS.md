@@ -248,42 +248,76 @@ adb shell dumpsys gfxinfo com.podv2.driver framestats
 adb shell dumpsys meminfo com.podv2.driver
 ```
 
-| | Low end: Xiaomi Redmi 13C | Flagship: Samsung S24 FE |
+### A measurement that was wrong, and why
+
+The first pass on both handsets measured almost nothing. The depot overview
+opens on the device's current location, both phones were in Karachi, and the
+seeded coverage area was London, so the viewport held **12 stops**. The frame
+times were real and meaningless: they measured a basemap with a dozen circles on
+it, not the roughly 5,000 stop case the screen exists for.
+
+Fixed by seeding 5,000 stops across the Karachi coverage area, on their own
+`EMP-KHI-` drivers so that neither demo round changed. The same viewport then
+held 101 stops and the map's own counter reported 15,715 in scope. The numbers
+below are from after that.
+
+The tell was memory. The empty-viewport run reported 331 MB PSS against the
+465 to 479 MB recorded for this same handset in an earlier session; the
+re-measured run reports 430 to 462 MB, which agrees. A number that disagrees
+with a previous measurement of the same thing is worth chasing before it is
+published.
+
+| | Flagship: Samsung S24 FE | Low end: Xiaomi Redmi 13C |
 |---|---|---|
-| Model | `23106RN0DA` | `SM-S721B` |
-| Android | 15 (SDK 35) | 16 |
-| Chipset | MediaTek Helio G85 (MT6769V/CZ) | to follow |
-| RAM | 5,797,220 kB (5.5 GiB) | to follow |
-| Screen | 720x1600 @ 320 dpi | to follow |
-| Depot map p50 frame time | **6 ms** / 6 ms | to follow |
-| Depot map p90 frame time | 8 ms / 8 ms | to follow |
-| Depot map p95 frame time | **9 ms** / 9 ms | to follow |
-| Depot map p99 frame time | 16 ms / 18 ms | to follow |
-| Janky frames | **0.76%** / 1.51% | to follow |
-| Janky frames (legacy metric) | 3.04% / 2.59% | to follow |
-| Missed vsync | 0 / 0 | to follow |
-| GPU p95 | 2 ms | to follow |
-| Frames rendered | 526 / 464 | to follow |
-| PSS after tour | **291 MB** / 330 MB | to follow |
-| RSS after tour | 450 MB / 490 MB | to follow |
-| PSS at sign-in, before any map | 119 MB | to follow |
+| Model | `SM-S721B` | `23106RN0DA` |
+| Android | 16 (SDK 36) | 15 (SDK 35) |
+| Chipset | Samsung Exynos 2400e (`s5e9945`) | MediaTek Helio G85 (MT6769V/CZ) |
+| RAM | 7,397,720 kB (7.1 GiB) | 5,797,220 kB (5.5 GiB) |
+| Cores | 10 | 8 |
+| Screen | 1080x2340 @ 450 dpi | 720x1600 @ 320 dpi |
+| Pixels to push | 2.53 M | 1.15 M |
+| Frames rendered | 862 / 845 | 215 / 203 |
+| p50 frame time | **5 ms** / 5 ms | **8 ms** / 8 ms |
+| p90 frame time | 12 ms / 5 ms | 12 ms / 11 ms |
+| p95 frame time | **12 ms** / 5 ms | **19 ms** / 15 ms |
+| p99 frame time | 14 ms / 8 ms | 19 ms / 18 ms |
+| Janky frames | **1.28%** / 0.95% | **5.12%** / 4.43% |
+| Missed vsync | 0 / 0 | 0 / 0 |
+| GPU p95 | 10 ms / 2 ms | 3 ms / 3 ms |
+| PSS after tour | **430 MB** / 462 MB | **298 MB** / 298 MB |
+| RSS after tour | 554 MB / 587 MB | 456 MB / 458 MB |
+| PSS at sign-in | 183 MB | 144 MB |
 
-Two runs of the same scripted tour, reported as `run 1 / run 2`.
+Two runs of the same scripted tour, reported as `run 1 / run 2`. Run 2 is faster
+across every percentile because the tile cache and the GeoJSON source are warm
+by then; run 1 is the honest cold number and run 2 is the steady state.
 
-**The budget phone holds 60 fps.** The frame budget at 60 Hz is 16.7 ms and the
-p95 is 9 ms, with zero missed vsyncs across 990 frames. That is a MediaTek Helio
-G85 rendering the depot map while the API behind it answers from a 20 million
+**The flagship holds 60 fps with the map full of pins.** The budget at 60 Hz is
+16.7 ms; the worst p95 across the two runs is 12 ms and there are no missed
+vsyncs across 1,707 frames, while the API behind it answers from a 20 million
 row table.
 
-Worth noting against the earlier Samsung S24 FE figures in DECISIONS.md (p95
-7 ms, jank 1.1 to 2.5%, 465 to 479 MB PSS): the low end phone shows *lower* jank
-and *less* memory. That is not the budget device outperforming the flagship. It
-is a 720x1600 screen having roughly a third of the pixels to push and a smaller
-tile cache to hold, which is exactly why both numbers are reported rather than
-one being taken as the device story.
+**The budget phone is at the edge of the budget, and does not fall off it.**
+Its p95 is 19 ms and 15 ms across the two runs against a 16.7 ms frame budget,
+so the slowest 5% of frames land a little late, and **no vsync is missed in
+either run**. The median is 8 ms, comfortably inside. That is the honest shape:
+a Helio G85 rendering a clustered country-scale map holds interactive frame
+rates with the worst frames grazing the deadline rather than dropping.
 
-PSS grew 291 MB to 330 MB between the two runs, which is map tile cache filling
-and is expected.
+Jank is four to five times the flagship's, which is the number to quote if
+asked where the low end hurts. GPU time is not the constraint on either handset
+(3 ms p95 on the Redmi, lower than the Samsung's 10 ms cold), so the cost is on
+the UI thread rather than in rasterising the pins.
+
+Memory runs the other way. The Redmi holds 298 MB against the Samsung's 430 to
+462 MB, and stays flat between runs where the Samsung grew. A 720x1600 screen
+caches a third of the tile pixels, so the budget device is under less memory
+pressure, not more. Two devices, two different limiting factors, which is why
+both are reported rather than one being taken as "the device result".
+
+An earlier set of Redmi figures (p95 9 ms, jank 0.76 to 1.51%) was withdrawn
+before publication: it was taken against the 12 stop viewport described above
+and measured an empty screen. The numbers in this table replace it.
 
 ### Functional checks on the low end device
 

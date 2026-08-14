@@ -68,9 +68,9 @@
 
 Measured same-region against the API on one `t3.small`: **p95 13.1ms**, flat to ~95 rps, knee at ~142 (p95 43ms), saturating near 200 with zero HTTP errors, a third of offered work turned away rather than failed. Steady state ~115 rps fits; bursts need three to four instances. It carries this because **photos never pass through the API**: the POST returns signed links, bytes go to S3, the server verifies each.
 
-Depot map: the old design sent all ~5,000 stops (~850KB) and grouped them on the phone; the shipped one sends only the visible viewport, grouped in Postgres, the map engine drawing pins with no UI node per stop. Samsung S24 FE, release build, scripted tour: **p95 7ms, jank 1.1-2.5%, 465-479MB PSS** over two runs. The old design was not re-measured, so no multiple is claimed.
+Depot map: the old design sent all ~5,000 stops (~850KB) and grouped them on the phone; the shipped one sends only the visible viewport, grouped in Postgres, the map engine drawing pins with no UI node per stop. The old design was not re-measured, so no multiple is claimed.
 
-At **20M attempts, 14M stops** every read stays a selective index lookup and cursor pagination is flat: first page 2.4ms, 19M deep **0.38ms**, the tuple comparison becoming an index bound. On a budget Helio G85 the depot map holds **p95 9ms, 0.76-1.51% jank, no missed vsync**, and a cold start with no network renders the day from storage.
+At **20M attempts, 14M stops** every read stays a selective index lookup and cursor pagination is flat: first page 2.4ms, 19M deep **0.38ms**, the tuple comparison becoming an index bound. Depot map, clustered country view: Exynos 2400e **p95 12ms, 5ms warm**, Helio G85 **p95 19ms, 15ms** against a 16.7ms budget, no missed vsync, and a cold start with no network renders the day from storage.
 
 ## Security, retention and erasure
 
