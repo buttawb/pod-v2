@@ -42,8 +42,26 @@ import { syncEngine } from '../sync/sync-engine';
  * Everything is read from SQLite, never from a network response, so this opens
  * and renders in a basement exactly as it does on wifi.
  */
+/**
+ * What the server knows about an attempt this device never captured.
+ *
+ * Carried in rather than fetched here, because the caller already has it: the
+ * stop screen asks the server for the stop's attempts and merges them into its
+ * list. Re-requesting the same thing to open a sheet would be a second round
+ * trip for data already in memory.
+ */
+export interface RemoteAttempt {
+  outcome: string | null;
+  capturedAt: string;
+  receivedAt?: string;
+  note?: string | null;
+  reasonCode?: string | null;
+  evidenceStatus?: string;
+  photoCount: number;
+}
+
 interface AttemptDetailsApi {
-  open: (clientAttemptId: string) => void;
+  open: (clientAttemptId: string, remote?: RemoteAttempt) => void;
 }
 
 const AttemptDetailsContext = createContext<AttemptDetailsApi | null>(null);
@@ -56,12 +74,28 @@ export function useAttemptDetails(): AttemptDetailsApi {
 
 export function AttemptDetailsProvider({ children }: { children: ReactNode }) {
   const [openId, setOpenId] = useState<string | null>(null);
-  const api = useMemo<AttemptDetailsApi>(() => ({ open: setOpenId }), []);
+  const [remote, setRemote] = useState<RemoteAttempt | null>(null);
+  const api = useMemo<AttemptDetailsApi>(
+    () => ({
+      open: (id, r) => {
+        setRemote(r ?? null);
+        setOpenId(id);
+      },
+    }),
+    [],
+  );
 
   return (
     <AttemptDetailsContext.Provider value={api}>
       {children}
-      <AttemptDetailsModal clientAttemptId={openId} onClose={() => setOpenId(null)} />
+      <AttemptDetailsModal
+        clientAttemptId={openId}
+        remote={remote}
+        onClose={() => {
+          setOpenId(null);
+          setRemote(null);
+        }}
+      />
     </AttemptDetailsContext.Provider>
   );
 }
@@ -78,9 +112,11 @@ const LOW_ACCURACY_M = 50;
 
 function AttemptDetailsModal({
   clientAttemptId,
+  remote,
   onClose,
 }: {
   clientAttemptId: string | null;
+  remote?: RemoteAttempt | null;
   onClose: () => void;
 }) {
   const [attempt, setAttempt] = useState<AttemptRow | null>(null);
@@ -133,7 +169,48 @@ function AttemptDetailsModal({
           </Pressable>
         </View>
 
-        {attempt ? (
+        {!attempt && remote ? (
+          /*
+            An attempt the server holds that this device never captured, which
+            is what the same driver signed in on a second handset produces.
+            Everything shown came back with the stop, so it renders offline too
+            once the stop itself has been read.
+
+            The photographs are the one thing missing. They live on S3 behind a
+            short-lived authenticated redirect and this sheet reads local files,
+            so it reports how many the server verified rather than showing a
+            broken thumbnail. Stating the count is true; implying we hold the
+            images would not be.
+          */
+          <ScrollView contentContainerStyle={styles.body}>
+            <Card style={styles.card}>
+              <Row label="Captured" value={formatStamp(remote.capturedAt)} />
+              <Row
+                label="Reached server"
+                value={remote.receivedAt ? formatStamp(remote.receivedAt) : 'Not recorded'}
+              />
+              {remote.reasonCode ? <Row label="Reason" value={remote.reasonCode} /> : null}
+              <Row
+                label="Photographs"
+                value={remote.photoCount === 0 ? 'None' : `${remote.photoCount} on the server`}
+              />
+              {remote.evidenceStatus ? (
+                <Row label="Evidence" value={remote.evidenceStatus} />
+              ) : null}
+            </Card>
+
+            {remote.note ? (
+              <Card style={styles.card}>
+                <Row label="Note" value={remote.note} />
+              </Card>
+            ) : null}
+
+            <Text style={type.meta}>
+              Captured on another device. This phone holds no copy, so the
+              photographs are not shown here.
+            </Text>
+          </ScrollView>
+        ) : attempt ? (
           <ScrollView contentContainerStyle={styles.body}>
             <Card style={styles.card}>
               {/* Two clocks, always both. The gap between them is the offline

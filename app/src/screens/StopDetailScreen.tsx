@@ -19,7 +19,7 @@ import {
   type,
 } from '../ui/components';
 import { attemptBadge, secondsUntilRetry } from '../sync/badges';
-import { useAttemptDetails } from '../ui/AttemptDetailsModal';
+import { useAttemptDetails, type RemoteAttempt } from '../ui/AttemptDetailsModal';
 import { getStop, type StopRow } from '../db/stops-repo';
 import { getDatabase } from '../db/schema';
 import { apiRequest } from '../api/client';
@@ -41,8 +41,8 @@ interface AttemptSummary {
   next_retry_at: string | null;
   confirmed: number;
   total: number;
-  /** True when this row came from the server rather than this device's queue. */
-  remote?: boolean;
+  /** Set when this row came from the server rather than this device's queue. */
+  remote?: RemoteAttempt;
 }
 
 /** The shape GET /api/v2/stops/{id} returns for each attempt. */
@@ -50,6 +50,9 @@ interface ServerAttempt {
   clientAttemptId: string;
   outcome: Outcome | null;
   capturedAt: string;
+  receivedAt?: string;
+  note?: string | null;
+  reasonCode?: string | null;
   evidenceStatus?: string;
   photos?: Array<{ index: number; status: string }>;
 }
@@ -125,7 +128,15 @@ export function StopDetailScreen({
           next_retry_at: null,
           confirmed: (a.photos ?? []).filter((p) => p.status === 'verified').length,
           total: (a.photos ?? []).length,
-          remote: true,
+          remote: {
+            outcome: a.outcome,
+            capturedAt: a.capturedAt,
+            receivedAt: a.receivedAt,
+            note: a.note ?? null,
+            reasonCode: a.reasonCode ?? null,
+            evidenceStatus: a.evidenceStatus,
+            photoCount: (a.photos ?? []).length,
+          },
         }));
       if (remote.length === 0) return;
       setAttempts(
@@ -210,15 +221,12 @@ export function StopDetailScreen({
             <Card
               key={attempt.client_attempt_id}
               style={styles.attemptCard}
-              // Only rows this device holds open the detail sheet. That sheet
-              // reads photographs, GPS and error history out of local storage,
-              // and a row captured on another handset has none of that here, so
-              // tapping it reported "no longer on this device" about an attempt
-              // that plainly exists. Saying where it lives is the honest answer;
-              // opening an empty sheet is not.
-              onPress={
-                attempt.remote ? undefined : () => details.open(attempt.client_attempt_id)
-              }
+              // A row captured on another handset opens the same sheet, given
+              // what the server returned rather than a local lookup that would
+              // find nothing. Reading it locally is what produced "this attempt
+              // is no longer on this device" about a row on the screen behind
+              // it: true, and useless, because nothing was lost.
+              onPress={() => details.open(attempt.client_attempt_id, attempt.remote)}
             >
               <View style={styles.attemptRow}>
                 <View style={styles.attemptDetails}>
