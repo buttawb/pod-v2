@@ -11,6 +11,19 @@ variable "open_web_ports" {
   default = true
 }
 
+# Postgres is normally unreachable from outside the Docker network: the compose
+# file gives it no host port, and nothing but the two backend containers speaks
+# to it. Setting this opens 5432 on the host firewall, which is only wanted when
+# a human needs a SQL client pointed at the demo data.
+#
+# Deliberately not defaulted to open. Passing "0.0.0.0/0" is a decision the
+# operator makes in tfvars, in the open, rather than something inherited here.
+variable "db_ingress_cidr" {
+  type        = string
+  default     = null
+  description = "CIDR allowed to reach Postgres on 5432; null leaves the port closed"
+}
+
 data "aws_vpc" "default" {
   default = true
 }
@@ -47,6 +60,18 @@ resource "aws_security_group" "host" {
     to_port     = 22
     protocol    = "tcp"
     cidr_blocks = [var.ssh_ingress_cidr]
+  }
+
+  dynamic "ingress" {
+    for_each = var.db_ingress_cidr == null ? [] : [var.db_ingress_cidr]
+
+    content {
+      description = "postgres for SQL clients, opened deliberately for the demo"
+      from_port   = 5432
+      to_port     = 5432
+      protocol    = "tcp"
+      cidr_blocks = [ingress.value]
+    }
   }
 
   egress {

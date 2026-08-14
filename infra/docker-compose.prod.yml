@@ -11,6 +11,22 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
       POD_APP_PASSWORD: ${POD_APP_PASSWORD}
+    # Bound to the host so a SQL client can reach the demo data directly during
+    # the walkthrough. The backends never needed this: they reach postgres over
+    # the compose network by service name.
+    #
+    # An earlier version of this comment said the host firewall decides who gets
+    # here. That was wrong on both halves. Docker publishes ports by writing its
+    # own iptables DNAT rules, which are traversed before the host's filter
+    # rules, so firewalld or ufw on the box do not gate this. The only thing
+    # gating it is the EC2 security group, which today carries no 5432 rule at
+    # all. The listener is therefore up on 0.0.0.0 and reachable from nothing.
+    #
+    # Which means this line is one security group rule away from publishing a
+    # database that holds driver password hashes and speaks no TLS. Remove it
+    # when the walkthrough is done.
+    ports:
+      - "5432:5432"
     volumes:
       - pod_pg:/var/lib/postgresql/data
       - ./init-db:/docker-entrypoint-initdb.d:ro

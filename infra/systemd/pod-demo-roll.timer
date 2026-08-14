@@ -1,0 +1,21 @@
+# Schedule half of the pair. See pod-demo-roll.service for what runs and why.
+
+[Unit]
+Description=Daily roll of the seeded PoD demo round
+
+[Timer]
+# A driver's round is today's work, selected on created_at >= start of day, so
+# the seeded data expires at UTC midnight. 00:05 is five minutes after that
+# boundary: late enough that the day has definitely turned, early enough that
+# nobody opening the demo in the morning sees an empty round. The instance
+# clock is UTC, which is what makes the bare time correct here.
+OnCalendar=*-*-* 00:05:00
+
+# Catch up after downtime that spanned 00:05 instead of waiting a whole day for
+# the next window. Safe because the SQL is idempotent by construction: once the
+# newest stop is already inside today the computed shift is zero and the UPDATE
+# matches no rows. Running it twice costs nothing.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
