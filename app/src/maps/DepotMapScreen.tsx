@@ -12,7 +12,7 @@ import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { apiRequest } from '../api/client';
 import { RenderMode, runCameraTour } from './perf-harness';
-import { resolveInitialCamera, zoomFor } from './initial-camera';
+import { DEPOT_COUNTRY_ZOOM, resolveInitialCamera } from './initial-camera';
 import { getCurrentFix } from '../capture/media';
 import { getTodayStops, type StopWithSync } from '../db/stops-repo';
 import { Button, colors, radius, shadow, spacing, type } from '../ui/components';
@@ -171,26 +171,77 @@ export function DepotMapScreen({
       // Centre on the driver first, so the bounds we then read are the ones
       // they will actually be looking at. Reading bounds first and moving
       // after would fetch a viewport nobody sees and immediately refetch.
+      //
+      // Country zoom, not street zoom. This screen answers "where is the work
+      // today" across the whole coverage area, so it opens far enough out that
+      // the server returns aggregated cells and the first paint is a few
+      // cluster bubbles over the cities. Opening at street level showed a
+      // dozen pins and hid the shape of the day.
       if (!centredOnDriver.current) {
         centredOnDriver.current = true;
         const target = resolveInitialCamera(await getCurrentFix());
-        if (target.source === 'device') {
-          cameraRef.current?.flyTo({
-            center: target.center,
-            zoom: zoomFor(target.source, DEPOT_ZOOM),
-            // No animation: this is where the map should have opened, not a
-            // journey the driver needs to watch.
-            duration: 0,
-          });
-        }
+        cameraRef.current?.flyTo({
+          center: target.center,
+          zoom: DEPOT_COUNTRY_ZOOM,
+          // No animation: this is where the map should have opened, not a
+          // journey the driver needs to watch.
+          duration: 0,
+        });
       }
 
       const [bounds, zoom] = await Promise.all([map.getBounds(), map.getZoom()]);
       const [west, south, east, north] = bounds;
       viewport.current = { bbox: `${west},${south},${east},${north}`, zoom };
-      await load(viewport.current.bbox, zoom, selected);
+
+      // The first request deliberately ignores that rectangle and asks for the
+      // whole world at cluster zoom.
+      //
+      // Fitting to a viewport-bounded response only ever re-frames what was
+      // already on screen, so the map settled on whichever corner of the
+      // coverage it happened to open over. Asking wide costs one small response
+      // because the server aggregates at this zoom, and it is what lets the
+      // effect below frame the real coverage without the app knowing in advance
+      // which country the depot operates in. Every request after this one is
+      // viewport-bounded as normal.
+      await load('-180,-85,180,85', 2, selected);
     })();
   }, [load, selected]);
+
+  /**
+   * Frame the coverage, once, from what the first response actually contained.
+   *
+   * A fixed opening zoom cannot do this. Centred on the driver it puts them in
+   * the middle of the view, which for a coastal depot spends half the screen on
+   * sea while the far end of the coverage sits off the top edge. The stops
+   * themselves are the only thing that knows how big the area is, so the first
+   * clustered response gets to decide, and this never runs again: refitting
+   * later would fight the driver every time they panned.
+   */
+  const fittedToCoverage = useRef(false);
+  useEffect(() => {
+    if (fittedToCoverage.current || !data || data.features.length < 2) return;
+    fittedToCoverage.current = true;
+
+    let west = 180, south = 90, east = -180, north = -90;
+    for (const f of data.features) {
+      const [lng, lat] = f.geometry.coordinates;
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+      if (lng < west) west = lng;
+      if (lng > east) east = lng;
+      if (lat < south) south = lat;
+      if (lat > north) north = lat;
+    }
+    if (west > east || south > north) return;
+
+    cameraRef.current?.fitBounds([west, south, east, north], {
+      // Extra room at the top: the status filter chips and the count badge
+      // float over the map there, and a cluster tucked under them looks like a
+      // cluster that is missing.
+      padding: { top: 130, right: 40, bottom: 60, left: 40 },
+      // No animation. This is where the map should have opened.
+      duration: 0,
+    });
+  }, [data]);
 
   const onRegionDidChange = useCallback(
     (event: NativeSyntheticEvent<ViewStateChangeEvent>) => {

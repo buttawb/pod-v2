@@ -14,11 +14,25 @@ describe('where a map opens', () => {
     expect(target.center).toEqual([67.0011, 24.8607]);
   });
 
-  it('prefers the device over the round, even when both are known', () => {
-    const target = resolveInitialCamera(KARACHI, [-0.1278, 51.5074]);
+  it('prefers the device over the round when the round is near enough to work', () => {
+    // A stop across the city. The driver is plausibly on this round, so their
+    // own position is the more useful centre.
+    const target = resolveInitialCamera(KARACHI, [67.05, 24.9]);
 
     expect(target.source).toBe('device');
     expect(target.center).toEqual([67.0011, 24.8607]);
+  });
+
+  it('shows the round instead when the driver is nowhere near it', () => {
+    // This assertion used to demand the opposite, and that was the bug. A
+    // Karachi handset holding a London round opened on Karachi, where the
+    // driver owns no stops at all, so the screen came up empty and read as
+    // broken. An empty map centred on the driver is worth less than a map of
+    // the work, however far away the work is.
+    const target = resolveInitialCamera(KARACHI, [-0.1278, 51.5074]);
+
+    expect(target.source).toBe('round');
+    expect(target.center).toEqual([-0.1278, 51.5074]);
   });
 
   it('falls back to the round when the fix is refused or unavailable', () => {

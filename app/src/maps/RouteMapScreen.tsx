@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -16,6 +16,8 @@ import { syncEngine } from '../sync/sync-engine';
 import { routeFeatureCollection } from './route-features';
 import { Button, SyncBadge, colors, radius, shadow, spacing, type } from '../ui/components';
 import { navigateTo } from './navigate-to';
+import { resolveInitialCamera } from './initial-camera';
+import { getCurrentFix } from '../capture/media';
 import {
   ATTRIBUTION,
   BASEMAP_STYLE_URL,
@@ -45,7 +47,10 @@ export function RouteMapScreen({
 }) {
   const insets = useSafeAreaInsets();
   const [stops, setStops] = useState<StopWithSync[] | null>(null);
-  const [following, setFollowing] = useState(true);
+  // Starts false and is decided once, below, from where the driver actually is
+  // relative to their own round.
+  const [following, setFollowing] = useState(false);
+  const cameraDecided = useRef(false);
   // Tapping a pin opens its detail rather than jumping straight into the stop:
   // at route zoom the pins are small and a mis-tap should cost a glance, not a
   // screen change.
@@ -71,6 +76,31 @@ export function RouteMapScreen({
 
   // Built once per stop-list change, never per GPS tick.
   const collection = useMemo(() => routeFeatureCollection(stops ?? []), [stops]);
+
+  /**
+   * Follow the driver only if their work is anywhere near them.
+   *
+   * Native location tracking used to be on from the first render, which meant
+   * the camera snapped to the handset the moment a fix arrived and abandoned
+   * the round that initialViewState had just framed. For a driver standing on
+   * their route that is right. For a driver holding a round on another
+   * continent it opened an empty map with every stop they own off the edge,
+   * which reads as "my route shows no stops".
+   *
+   * Decided once, after the stops are known, and never revisited: a later
+   * change would pull the map out from under someone already panning.
+   */
+  useEffect(() => {
+    if (cameraDecided.current || !stops) return;
+    cameraDecided.current = true;
+    void (async () => {
+      const first = collection.features[0]?.geometry.coordinates as
+        | [number, number]
+        | undefined;
+      const target = resolveInitialCamera(await getCurrentFix(), first ?? null);
+      setFollowing(target.source === 'device');
+    })();
+  }, [stops, collection]);
 
   const onPress = useCallback(
     (event: NativeSyntheticEvent<PressEventWithFeatures>) => {
