@@ -1,4 +1,5 @@
 import { Controller, Get, Header, VERSION_NEUTRAL } from '@nestjs/common';
+import { ApiOperation, ApiProduces, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Public } from '../../common/auth/jwt-auth.guard';
 
 /**
@@ -16,10 +17,51 @@ import { Public } from '../../common/auth/jwt-auth.guard';
  * would need a build step to survive into the image, and a privacy policy
  * that 404s in production is the one failure mode worth engineering out.
  */
+@ApiTags('legal')
 @Controller({ path: 'privacy', version: VERSION_NEUTRAL })
 export class PrivacyController {
   @Public()
   @Get()
+  @ApiOperation({
+    summary: 'The public privacy policy page (HTML, no authentication)',
+    description: [
+      'Returns the privacy policy as a complete HTML page. This is the URL Google Play links to',
+      'from the store listing for com.podv2.driver.',
+      '',
+      'No token, no Authorize step, no role: press Try it out and Execute, or just open',
+      '/api/privacy in a browser, which reads better than the escaped string Swagger UI shows.',
+      'It is one of the very few routes on this API that is public, and it has to stay that way,',
+      'because Play requires the page to be readable with no sign-in and re-checks it after',
+      'launch.',
+      '',
+      'Unversioned on purpose. It sits at /api/privacy with no /v2 segment, so the address in',
+      'the store listing does not move when the API version does.',
+      '',
+      'Worth reading alongside POST /api/v2/legal/erasure: the "Your rights" section is where',
+      'the Article 17(3)(e) position is stated to the public, that contact details are erased on',
+      'request while the delivery record itself is exempt until the six-year retention window',
+      'closes.',
+      '',
+      'Cached for an hour, and served with a deliberately tight Content-Security-Policy: the',
+      'page loads nothing at all, no scripts, no fonts, no images, one inline stylesheet.',
+    ].join('\n'),
+  })
+  @ApiProduces('text/html')
+  @ApiResponse({
+    status: 200,
+    description:
+      'The policy page. Always 200: the document is compiled into the binary rather than read ' +
+      'from disk or a database, so there is no failure mode where a store-listing link goes ' +
+      'dead.',
+    content: {
+      'text/html': {
+        schema: { type: 'string' },
+        example:
+          '<!doctype html>\n<html lang="en">\n<head>...</head>\n<body>\n' +
+          '<h1>PoD v2 &mdash; Privacy Policy</h1>\n...\n</body>\n</html>',
+      },
+    },
+  })
   @Header('Content-Type', 'text/html; charset=utf-8')
   @Header('Cache-Control', 'public, max-age=3600')
   // Set explicitly rather than inherited from helmet's default, which is

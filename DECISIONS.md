@@ -4,7 +4,7 @@
 
 **A new attempts table, not changes to pods.** `pods` allows one record per stop (`stop_id` UNIQUE); the brief needs many attempts with different evidence. `delivery_attempts` holds the truth, append-only; `pods` stays a live summary of the latest attempt for the old app.
 
-**The database itself blocks edits.** The app's database user has no DELETE on evidence, and may UPDATE only four bookkeeping columns (upload progress and signature verification, never testimony). Corrections are new records.
+**The database itself blocks edits.** The app's database user has no DELETE on evidence, and may UPDATE only bookkeeping columns (upload progress, signature verification, updated_at), never testimony. Corrections are new records.
 
 **Outcomes are text with a CHECK rule, not an enum.** A Postgres enum can never remove a value and adding one fights transactional migrations; a CHECK gives the same protection with reversible SQL on a no-downtime system.
 
