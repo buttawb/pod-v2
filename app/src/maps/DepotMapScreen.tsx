@@ -165,70 +165,25 @@ export function DepotMapScreen({
       const map = mapRef.current;
       if (!map) return;
 
-      // Nothing recentres this map on the device.
+      // The camera is never moved by this screen. It opens on the depot, at
+      // DEPOT_ZOOM, and everything after that is the driver's gesture.
       //
-      // It used to fly to the driver's position once the map was ready, which
-      // was wrong twice over. The coverage is wherever the depot works, not
-      // wherever the driver happens to be standing, so a driver away from the
-      // area opened on an empty screen. And the move was not as "once" as it
-      // looked: anything that reloaded the map ran it again, so tapping a
-      // cluster threw the camera back across the world mid-gesture.
-      //
-      // The camera is now framed from the coverage itself, below, and after
-      // that it only moves when someone drags it.
+      // Two earlier versions did move it and both were wrong in front of a
+      // user. Flying to the device put a driver working away from the area on
+      // empty ground, and it re-ran on every map reload, so tapping a cluster
+      // threw the camera across the world mid-gesture. Fitting to the coverage
+      // replaced that with a worse one: the coverage here spans two continents,
+      // so "fit it" meant zooming out to the whole planet a beat after the map
+      // had already drawn the depot. A map that visibly moves on open is a map
+      // the driver has to re-orient on every single time.
       const [bounds, zoom] = await Promise.all([map.getBounds(), map.getZoom()]);
       const [west, south, east, north] = bounds;
       viewport.current = { bbox: `${west},${south},${east},${north}`, zoom };
 
-      // The first request deliberately ignores that rectangle and asks for the
-      // whole world at cluster zoom.
-      //
-      // Fitting to a viewport-bounded response only ever re-frames what was
-      // already on screen, so the map settled on whichever corner of the
-      // coverage it happened to open over. Asking wide costs one small response
-      // because the server aggregates at this zoom, and it is what lets the
-      // effect below frame the real coverage without the app knowing in advance
-      // which country the depot operates in. Every request after this one is
-      // viewport-bounded as normal.
-      await load('-180,-85,180,85', 2, selected);
+      await load(viewport.current.bbox, zoom, selected);
     })();
   }, [load, selected]);
 
-  /**
-   * Frame the coverage, once, from what the first response actually contained.
-   *
-   * A fixed opening zoom cannot do this. Centred on the driver it puts them in
-   * the middle of the view, which for a coastal depot spends half the screen on
-   * sea while the far end of the coverage sits off the top edge. The stops
-   * themselves are the only thing that knows how big the area is, so the first
-   * clustered response gets to decide, and this never runs again: refitting
-   * later would fight the driver every time they panned.
-   */
-  const fittedToCoverage = useRef(false);
-  useEffect(() => {
-    if (fittedToCoverage.current || !data || data.features.length < 2) return;
-    fittedToCoverage.current = true;
-
-    let west = 180, south = 90, east = -180, north = -90;
-    for (const f of data.features) {
-      const [lng, lat] = f.geometry.coordinates;
-      if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
-      if (lng < west) west = lng;
-      if (lng > east) east = lng;
-      if (lat < south) south = lat;
-      if (lat > north) north = lat;
-    }
-    if (west > east || south > north) return;
-
-    cameraRef.current?.fitBounds([west, south, east, north], {
-      // Extra room at the top: the status filter chips and the count badge
-      // float over the map there, and a cluster tucked under them looks like a
-      // cluster that is missing.
-      padding: { top: 130, right: 40, bottom: 60, left: 40 },
-      // No animation. This is where the map should have opened.
-      duration: 0,
-    });
-  }, [data]);
 
   const onRegionDidChange = useCallback(
     (event: NativeSyntheticEvent<ViewStateChangeEvent>) => {

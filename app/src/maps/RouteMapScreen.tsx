@@ -4,6 +4,7 @@ import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Camera,
+  type CameraRef,
   GeoJSONSource,
   Layer,
   Map,
@@ -49,6 +50,8 @@ export function RouteMapScreen({
   // at route zoom the pins are small and a mis-tap should cost a glance, not a
   // screen change.
   const [selected, setSelected] = useState<StopWithSync | null>(null);
+  const cameraRef = useRef<CameraRef>(null);
+  const framed = useRef(false);
 
   const load = useCallback(async () => {
     setStops(await getTodayStops());
@@ -70,6 +73,39 @@ export function RouteMapScreen({
 
   // Built once per stop-list change, never per GPS tick.
   const collection = useMemo(() => routeFeatureCollection(stops ?? []), [stops]);
+
+  /**
+   * Frame the whole round, once.
+   *
+   * Opening on the first stop at a fixed zoom showed one pin and put the other
+   * hundred and fifty off the edge, which reads as a map with no stops on it. A
+   * round covers a town, not a street, so the round itself decides the camera,
+   * the same way the depot map is framed by its coverage.
+   *
+   * Once only, and never again: refitting later would drag the map out from
+   * under a driver who had panned somewhere deliberately.
+   */
+  useEffect(() => {
+    if (framed.current || collection.features.length < 2) return;
+    framed.current = true;
+
+    let west = 180, south = 90, east = -180, north = -90;
+    for (const f of collection.features) {
+      const [lng, lat] = f.geometry.coordinates;
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) continue;
+      if (lng < west) west = lng;
+      if (lng > east) east = lng;
+      if (lat < south) south = lat;
+      if (lat > north) north = lat;
+    }
+    if (west > east || south > north) return;
+
+    cameraRef.current?.fitBounds([west, south, east, north], {
+      // Room at the top for the back button and the status legend.
+      padding: { top: 120, right: 48, bottom: 72, left: 48 },
+      duration: 0,
+    });
+  }, [collection]);
 
 
   const onPress = useCallback(
@@ -93,6 +129,7 @@ export function RouteMapScreen({
     <View style={styles.container}>
       <Map style={styles.map} mapStyle={BASEMAP_STYLE_URL} attribution logo={false}>
         <Camera
+          ref={cameraRef}
           initialViewState={{
             center: collection.features[0]?.geometry.coordinates ?? DEPOT_CENTER,
             zoom: 13,
