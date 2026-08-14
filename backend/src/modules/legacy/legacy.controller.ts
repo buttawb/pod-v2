@@ -144,8 +144,8 @@ export class LegacyController {
   @ApiParam({
     name: 'id',
     description:
-      'The stop to attach this POD to, as a UUID. The value shown is a placeholder for the shape only and will answer 404: replace it with a real id from GET /api/stops above, ideally one whose pod is null, since a stop that already has one answers 409. It must be a stop on your own round.',
-    example: '14d9f5a2-1b2c-4250-b84a-8db1060aa7d4',
+      'The stop to attach this POD to, as a UUID. The value shown is a real stop on the seeded round whose pod is still null, so this runs as written and answers 201. Run it twice and the second answers 409: one POD per stop is the frozen v1 contract, not a bug. For another go, take an id from GET /api/stops above whose `pod` is null. It must be a stop on your own round.',
+    example: '0460c331-ab35-4f87-82e7-3351b4d8d180',
     format: 'uuid',
   })
   @ApiBody({

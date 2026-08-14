@@ -90,10 +90,13 @@ export class MediaController {
   @ApiParam({
     name: 'attemptId',
     format: 'uuid',
-    example: 'f4533fe4-4c09-4e6f-ae44-585733fac684',
+    example: 'bdbf6206-6e89-484a-9800-8c290715765e',
     description:
-      'Server-side attempt UUID. The example is illustrative and will 404: substitute a real one ' +
-      'from POST /api/v2/attempts or GET /api/v2/office/attempts.',
+      'Server-side attempt UUID. The example is a real attempt on the seeded London round with a ' +
+      'verified photo at index 0, so it redirects as written when you are signed in as ' +
+      'EMP-TEST-001. Signed in as any other driver it answers 403, which is the point: a ' +
+      'photograph is readable only by the driver who captured it. Other ids come from ' +
+      'POST /api/v2/attempts or GET /api/v2/office/attempts.',
   })
   @ApiParam({
     name: 'index',
@@ -173,10 +176,12 @@ export class MediaController {
   @ApiParam({
     name: 'attemptId',
     format: 'uuid',
-    example: 'f4533fe4-4c09-4e6f-ae44-585733fac684',
+    example: 'bdbf6206-6e89-484a-9800-8c290715765e',
     description:
       'Server-side attempt UUID, from POST /api/v2/attempts or GET /api/v2/office/attempts. The ' +
-      'example is illustrative and will 404.',
+      'example is a real attempt on the seeded London round that carries a signature, so it ' +
+      'redirects as written when signed in as EMP-TEST-001. An attempt with no signature ' +
+      'answers 404 rather than redirecting to a missing object.',
   })
   @ApiResponse({
     status: 302,
