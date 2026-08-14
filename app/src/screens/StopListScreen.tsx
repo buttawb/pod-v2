@@ -162,6 +162,27 @@ const StopListRow = memo(
               </View>
             ) : null}
 
+            {/*
+              Evidence that exists on the server and not on this phone.
+
+              Every badge above is derived from the local attempts table, which
+              is right for work this device did and wrong for work it did not.
+              The same driver signed in on a second handset, or on a spare
+              picked up mid-shift, would see a stop tick over to delivered on
+              the next refresh while the badge stayed blank, because the row
+              backing that badge only ever existed on the other phone.
+
+              The server status is the tell: it only moves off pending when an
+              attempt has landed. So no local work plus a moved status means the
+              evidence is on the server, captured elsewhere, and saying "On
+              server" is exactly true.
+            */}
+            {!state && !hasLocalWork && item.status !== 'pending' ? (
+              <View style={styles.badgeRow}>
+                <SyncBadge badge={{ label: 'On server', tone: 'good' }} />
+              </View>
+            ) : null}
+
             {item.has_unfinished_draft === 1 ? (
               <View style={styles.badgeRow}>
                 <SyncBadge badge={{ label: 'Unfinished attempt', tone: 'progress' }} />
@@ -310,7 +331,17 @@ export function StopListScreen({
     try {
       if (syncEngine.isOnline()) {
         // Pull-to-sync means exactly that: fetch the route AND push evidence.
-        await refreshTodayStops().catch(() => undefined);
+        //
+        // A failed fetch used to be swallowed whole, which left the driver
+        // looking at the phone's own copy believing it had just come from the
+        // server. That is the worst of both: stale data wearing a fresh label.
+        // It now falls back to local, which is still the right thing to show,
+        // and says that is what happened.
+        try {
+          await refreshTodayStops();
+        } catch {
+          setOfflineNote(true);
+        }
         await syncEngine.kick();
       } else {
         // Offline is not an error and must not read like one. The round is

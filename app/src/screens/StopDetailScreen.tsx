@@ -22,6 +22,7 @@ import { attemptBadge, secondsUntilRetry } from '../sync/badges';
 import { useAttemptDetails } from '../ui/AttemptDetailsModal';
 import { getStop, type StopRow } from '../db/stops-repo';
 import { getDatabase } from '../db/schema';
+import { apiRequest } from '../api/client';
 import { getDraftForStop, getPhotos, retryNow } from '../db/attempts-repo';
 import { isSubstantiveDraft } from '../sync/drafts';
 import { getSession } from '../auth/session';
@@ -40,6 +41,17 @@ interface AttemptSummary {
   next_retry_at: string | null;
   confirmed: number;
   total: number;
+  /** True when this row came from the server rather than this device's queue. */
+  remote?: boolean;
+}
+
+/** The shape GET /api/v2/stops/{id} returns for each attempt. */
+interface ServerAttempt {
+  clientAttemptId: string;
+  outcome: Outcome | null;
+  capturedAt: string;
+  evidenceStatus?: string;
+  photos?: Array<{ index: number; status: string }>;
 }
 
 export function StopDetailScreen({
@@ -60,20 +72,70 @@ export function StopDetailScreen({
 
   const load = useCallback(async () => {
     setStop(await getStop(stopId));
-    setAttempts(
-      await getDatabase().getAllAsync<AttemptSummary>(
-        `SELECT a.client_attempt_id, a.attempt_no, a.outcome, a.captured_at, a.sync_state,
-                a.last_error_message, a.next_retry_at,
-                (SELECT count(*) FROM attempt_photos p
-                  WHERE p.client_attempt_id = a.client_attempt_id AND p.upload_state = 'confirmed') AS confirmed,
-                (SELECT count(*) FROM attempt_photos p
-                  WHERE p.client_attempt_id = a.client_attempt_id) AS total
-         FROM attempts a
-         WHERE a.stop_id = ? AND a.sync_state <> 'draft'
-         ORDER BY a.attempt_no DESC`,
-        stopId,
-      ),
+
+    const local = await getDatabase().getAllAsync<AttemptSummary>(
+      `SELECT a.client_attempt_id, a.attempt_no, a.outcome, a.captured_at, a.sync_state,
+              a.last_error_message, a.next_retry_at,
+              (SELECT count(*) FROM attempt_photos p
+                WHERE p.client_attempt_id = a.client_attempt_id AND p.upload_state = 'confirmed') AS confirmed,
+              (SELECT count(*) FROM attempt_photos p
+                WHERE p.client_attempt_id = a.client_attempt_id) AS total
+       FROM attempts a
+       WHERE a.stop_id = ? AND a.sync_state <> 'draft'
+       ORDER BY a.attempt_no DESC`,
+      stopId,
     );
+    setAttempts(local);
+
+    /**
+     * Then ask the server what it holds for this stop, and merge.
+     *
+     * This list used to be local rows only, which is wrong the moment the same
+     * driver is signed in on a second handset, or picks up a spare mid-shift.
+     * An attempt captured on the other phone lives on the server and nowhere on
+     * this one, so the history read empty here while the stop itself showed as
+     * delivered: the list status comes from the server on every route refresh,
+     * the attempts did not.
+     *
+     * Local wins on conflict, deliberately. A row this device is still holding
+     * knows things the server cannot: that it is queued, retrying, or parked
+     * with an error. The server copy of the same attempt would overwrite that
+     * with a flat "synced" and hide work still in flight.
+     *
+     * Offline is not a failure. The catch leaves the local list exactly as it
+     * was, which is the whole offline promise.
+     */
+    if (!syncEngine.isOnline()) return;
+    try {
+      const detail = await apiRequest<{ attempts?: ServerAttempt[] }>(
+        `/api/v2/stops/${stopId}`,
+      );
+      const known = new Set(local.map((a) => a.client_attempt_id));
+      const remote: AttemptSummary[] = (detail.attempts ?? [])
+        .filter((a) => a.clientAttemptId && !known.has(a.clientAttemptId))
+        .map((a, i) => ({
+          client_attempt_id: a.clientAttemptId,
+          // Numbered below the local ones so the ordering below stays stable;
+          // the server does not expose this device's attempt_no sequence.
+          attempt_no: -(i + 1),
+          outcome: a.outcome,
+          captured_at: a.capturedAt,
+          sync_state: SyncState.Synced,
+          last_error_message: null,
+          next_retry_at: null,
+          confirmed: (a.photos ?? []).filter((p) => p.status === 'verified').length,
+          total: (a.photos ?? []).length,
+          remote: true,
+        }));
+      if (remote.length === 0) return;
+      setAttempts(
+        [...local, ...remote].sort(
+          (x, y) => Date.parse(y.captured_at) - Date.parse(x.captured_at),
+        ),
+      );
+    } catch {
+      // Keep what is on the device.
+    }
 
     const session = await getSession();
     const draft = session ? await getDraftForStop(stopId, session.driverId) : null;
