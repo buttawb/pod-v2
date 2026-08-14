@@ -1,14 +1,15 @@
 # ---------------------------------------------------------------------------
-# Aurora PostgreSQL Serverless v2: the destination half of a database move.
+# Aurora PostgreSQL Serverless v2: the database.
 #
-# Today the data lives in a Postgres container sharing one EC2 box with the
-# API. That box is a single point of failure for both, the volume is backed up
-# by nothing, and a lost instance is a lost database. This module builds the
-# replacement. It deliberately touches none of that: the container keeps
-# running as the fallback until the cutover is proven against real row counts.
+# It is deliberately not on the API instance. Sharing a box would make one small
+# instance a single point of failure for both the API and the evidence, back the
+# data up with nothing but a volume, and put the first scaling ceiling in the
+# wrong place. Here the instance stores nothing and is disposable, while the
+# data sits behind managed backups and storage that grows on its own.
 #
-# Everything here is inert unless the caller opts in (var.enable_aurora at the
-# root), so an apply by someone who has not chosen to move changes nothing.
+# Serverless v2 rather than a fixed instance class because the load is a working
+# day: busy while rounds are out, near idle overnight, and paying for the peak
+# around the clock buys nothing.
 # ---------------------------------------------------------------------------
 
 variable "name_prefix" {
@@ -55,21 +56,20 @@ variable "master_password" {
   }
 }
 
-# The whole database is roughly 12k rows across every table, well under 100 MB,
-# so memory is not what sets these numbers. 1 ACU is about 2 GiB.
+# 1 ACU is about 2 GiB. The working set that matters is a driver's day, which is
+# small however large the history behind it grows, so these are not sized by
+# total rows.
 #
-# min 0.5: the smallest floor that keeps the instance warm. At 1 GiB the entire
-# working set is cached many times over. Not 0: scale-to-zero would park the
-# cluster after idle and charge the first connection a resume of roughly ten to
-# fifteen seconds, which the API's connection pool and the health check would
-# both read as an outage. A demo that is idle between viewings is exactly the
-# workload that would hit that path every single time.
+# min: the smallest floor that keeps the instance warm. Not 0: scale-to-zero
+# parks an idle cluster and charges the first connection a resume of roughly ten
+# to fifteen seconds, which the connection pool and the health check would both
+# read as an outage. A system that is quiet overnight would pay that every
+# morning.
 #
-# max 4: about 8 GiB, four times the memory of the t3.small that currently runs
-# the API and the database together. That ceiling means a k6 ramp is bounded by
-# the application, not by the database, while still capping the blast radius of
-# a runaway query. Note the floor bills continuously, so 0.5 is a cost decision
-# as much as a performance one.
+# max: high enough that a load test is bounded by the application rather than by
+# the database, while still capping the blast radius of a runaway query. The
+# floor bills continuously and the ceiling only bills what is drawn, so they are
+# not symmetrical decisions.
 variable "min_capacity" {
   type        = number
   default     = 0.5
@@ -94,8 +94,8 @@ variable "backup_retention_period" {
 }
 
 # Both windows are UTC. 17:00 UTC is 01:00 in Singapore, the quietest hour for
-# this deployment, and it stays clear of the 00:05 UTC demo-route roll timer on
-# the app box. The maintenance window must not overlap the backup window.
+# this deployment, and it stays clear of the 00:05 UTC roll timer. The
+# maintenance window must not overlap the backup window.
 variable "preferred_backup_window" {
   type    = string
   default = "17:00-17:30"
@@ -110,8 +110,7 @@ variable "preferred_maintenance_window" {
 #
 # deletion_protection = false: this is a demo cluster with a scheduled teardown.
 # A cluster that refuses terraform destroy is a cluster that quietly bills
-# forever after the take-home is over, and the old Postgres container still
-# holds the same rows, so Aurora is not the only copy of anything.
+# forever once the evaluation is over.
 #
 # skip_final_snapshot = false: that teardown still leaves a restorable snapshot
 # behind. It is the cheap insurance that makes turning deletion protection off
@@ -253,10 +252,9 @@ resource "aws_rds_cluster" "pod" {
   # instances attached. engine_mode = "serverless" is the v1 product, which is
   # a different and worse thing.
   #
-  # The version is an exact match to the 16.14 server being migrated from. Same
-  # major and same minor means the dump restores without a version-skew
-  # argument, and it removes one variable from the comparison when the row
-  # counts are checked afterwards.
+  # Pinned to an exact minor rather than tracking latest, so that local
+  # development, the test suite and production all run the same server and a
+  # planner difference is never something to rule out first.
   engine_version = var.engine_version
 
   database_name = var.database_name
@@ -283,8 +281,8 @@ resource "aws_rds_cluster" "pod" {
   skip_final_snapshot       = var.skip_final_snapshot
   final_snapshot_identifier = var.skip_final_snapshot ? null : var.final_snapshot_identifier
 
-  # The Postgres log is the first thing anyone wants during a cutover, and the
-  # container's docker logs will not be there to read once the API points here.
+  # The Postgres log is the first thing anyone wants when a query misbehaves,
+  # and a managed cluster has no host to ssh into and tail it from.
   enabled_cloudwatch_logs_exports = ["postgresql"]
 
   # A demo cluster has no maintenance window worth deferring to. A change that
@@ -312,16 +310,15 @@ resource "aws_rds_cluster_instance" "writer" {
   # editing that route table.
   publicly_accessible = false
 
-  # Free tier, 7 day retention. The reason to have it is the cutover itself:
-  # "the queries are slower on Aurora" needs an answer better than a shrug.
+  # Free tier, 7 day retention. "The API feels slow" needs an answer better than
+  # a shrug, and top SQL by wait event is that answer.
   performance_insights_enabled          = true
   performance_insights_retention_period = 7
 
-  # Pinned off because engine_version is pinned to an exact 16.14. Letting AWS
-  # move the minor version in a maintenance window would make Terraform report
-  # drift on a cluster nobody touched, and would break the exact-match property
-  # this migration is being verified against. Turning it back on is a follow-up
-  # with a version bump attached, not a default.
+  # Pinned off because engine_version is pinned to an exact minor. Letting AWS
+  # move it in a maintenance window would make Terraform report drift on a
+  # cluster nobody touched. Upgrading is a change with a version bump attached,
+  # not something that happens on a Sunday night.
   auto_minor_version_upgrade = false
 
   copy_tags_to_snapshot = true
@@ -333,23 +330,14 @@ resource "aws_rds_cluster_instance" "writer" {
 }
 
 # ---------------------------------------------------------------------------
-# What the caller needs to point the application here.
+# What the caller needs to reach it.
 #
-# Two things this module cannot do for you, stated here so they do not get
-# discovered at cutover time:
-#
-# 1. The pod_app runtime role does not exist on this cluster. On the container
-#    it is created by infra/init-db/01-create-app-role.sh, which only ever runs
-#    on Docker's first-init of an empty volume. Aurora never runs it. The role
-#    has to be created explicitly with CREATE ROLE before DATABASE_URL will
-#    connect. The append-only grants on delivery_attempts and attempt_photos do
-#    come across, because migrations 0003 and 0005 create them, but a grant to
-#    a role that does not exist fails, so the role comes first.
-#
-# 2. /etc/systemd/system/pod-demo-roll.service still runs psql against the
-#    local container by name (docker exec pod-v2-postgres-1). It will keep
-#    rolling the old database after cutover, silently, and the demo route on
-#    Aurora will stop advancing. It has to be repointed in the same change.
+# One thing this module cannot do for you: the pod_app runtime role does not
+# exist on a freshly created cluster. Migrations 0003 and 0005 grant the
+# append-only privileges to it, but both wrap their GRANTs in an IF EXISTS on
+# the role, so running migrations before the role is created skips those grants
+# silently AND records the migrations as applied. Create the role first. See
+# infra/bootstrap-db-role.sh.
 # ---------------------------------------------------------------------------
 
 output "writer_endpoint" {

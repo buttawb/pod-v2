@@ -36,3 +36,6 @@ infra/terraform/*.tfplan
 # Test artifacts
 coverage/
 loadtest/results/*.json
+
+# Agent tool config, not part of the deliverable
+.claude/

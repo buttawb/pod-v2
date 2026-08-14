@@ -26,7 +26,7 @@
 
 **Duplicates die by design.** The phone creates the attempt's ID; a unique rule in Postgres is the judge, so a resend gets 200 `deduplicated`; the same ID with different content gets 422, a bug to surface, not a retry.
 
-**Retries are limited and never silent.** Waits grow with randomness so phones do not retry together; after 8 tries the attempt parks visibly. Being offline costs no retries: a basement is not a failure.
+**Retries are limited and never silent.** Waits grow with jitter so phones do not retry together; after 8 tries the attempt parks visibly. Offline costs no retries: a basement is not a failure.
 
 **Two-phase visibility.** The attempt shows once its JSON lands; photos follow. "On server" means both confirmed; anything less says what is outstanding.
 
@@ -36,25 +36,25 @@
 
 ## Mid-day changes and conflicts
 
-**Lists flow down, attempts flow up.** Adds and re-orders apply on sync; a withdrawn stop greys out unless it has local work, which stays visible.
+**Lists flow down, attempts flow up.** Adds and re-orders apply on sync; a withdrawn stop greys out unless it has local work.
 
 **Evidence always wins.** The server accepts an attempt whose stop was reassigned after capture and flags it, read-only at `/api/v2/conflicts`. An office edit at 14:00 does not undo a delivery made offline at 13:40.
 
 **Carded and access-failure end the stop's day** unless the driver taps retry-today.
 
-**Conflict resolution is designed, not built** (sanctioned); accept-and-flag is live.
+**Conflict resolution is designed, not built**, sanctioned; accept-and-flag is live.
 
 ## Migration (14M rows, 30% on v1.4.2, no window)
 
-1. **Safety net.** Contract tests pin the frozen v1 surface (login `{email,password}`, 24h token, duplicate 409, stable `pods.created_at`). Red state captured by curl against the live API, fixed, re-checked green.
-2. **Expand.** Only add, never change or remove. Indexes build without locking; half-built leftovers dropped first, loud failure if any remain.
-3. **Dual-write behind a flag.** One transaction writes the attempt, stop status, and `pods` summary. Soak, watching v1 latency.
-4. **Backfill.** Copy 14M old rows in batches of 1,000 with pauses; resumable and idempotent (IDs derive from the old rows); verified by counts, checksums, a sample compare.
+1. **Safety net.** Contract tests pin the frozen v1 surface (login `{email,password}`, 24h token, duplicate 409, stable `pods.created_at`), red first against the live API, then green.
+2. **Expand.** Only add. Indexes build without locking; half-built leftovers dropped first, loud failure if any remain.
+3. **Dual-write behind a flag.** One transaction writes the attempt, stop status and `pods` summary. Soak, watching v1 latency.
+4. **Backfill.** 14M rows in batches of 1,000 with pauses; resumable and idempotent (IDs derive from the old rows); verified by counts, checksums, a sample compare.
 5. **New reads for new surfaces only.** `GET /api/stops` stays on `pods`: moving a frozen read path gains nothing and risks the contract.
-6. **Sunset gate.** Removal starts only after v1 traffic is zero for seven days.
-7. **Remove, in order.** Flag off -> block writes at the database (a tripwire) -> return 410 -> rename the table (instantly reversible) -> drop one release later. Step 1 is a live flag; steps 2 to 5 are designed, not built.
+6. **Sunset gate.** Removal starts only after v1 traffic is zero for a week.
+7. **Remove, in order.** Flag off -> block writes at the database -> 410 -> rename the table (instantly reversible) -> drop a release later. Step 1 is live; the rest are designed, not built.
 
-**The summary is ordered by the server clock**: a wrong future phone date cannot freeze what v1 sees.
+**The summary is ordered by the server clock**: a wrong phone date cannot freeze what v1 sees.
 
 ## Rollout and forced update
 
@@ -66,9 +66,9 @@
 
 ## Performance
 
-API measured from a same-region server: **p95 13.1ms** on one `t3.small` with Postgres alongside. Flat to ~95 rps, the knee at ~142 (p95 43ms), full near 200 with zero HTTP errors though a third of offered work is turned away rather than errored. Fleet steady state ~115 rps fits; bursts need three to four instances. One box carries it because **photos never pass through the API**: the attempt POST returns signed upload links, bytes go straight to S3, and the server checks each file exists.
+Measured same-region against the API on one `t3.small`: **p95 13.1ms**, flat to ~95 rps, knee at ~142 (p95 43ms), saturating near 200 with zero HTTP errors, a third of offered work turned away rather than failed. Steady state ~115 rps fits; bursts need three to four instances. It carries this because **photos never pass through the API**: the POST returns signed links, bytes go to S3, the server verifies each object.
 
-Depot map: the old design sent all ~5,000 stops (~850KB) and grouped them on the phone; the shipped design sends only the visible viewport, grouped in Postgres, with the map engine drawing the pins itself and no UI component per stop. Measured on a Samsung S24 FE, release build, scripted camera tour: **p95 frame time 7ms, jank 1.1-2.5%, 465-479MB PSS** across two runs. The old design was not re-measured, so no before/after multiple is claimed.
+Depot map: the old design sent all ~5,000 stops (~850KB) and grouped them on the phone; the shipped one sends only the visible viewport, grouped in Postgres, the map engine drawing pins with no UI component per stop. Samsung S24 FE, release build, scripted camera tour: **p95 frame time 7ms, jank 1.1-2.5%, 465-479MB PSS** over two runs. The old design was not re-measured, so no multiple is claimed.
 
 ## Security, retention and erasure
 
@@ -76,20 +76,24 @@ Depot map: the old design sent all ~5,000 stops (~850KB) and grouped them on the
 
 **The AI provider gets the note text and outcome word only**, never an address, name, GPS, or photo; a test asserts it against the outbound request.
 
-**Retention is six years (confirmed).** Evidence is excluded from GDPR erasure under the legal-claims exemption (Art. 17(3)(e)), structurally: the app's database role cannot delete it. The erasure routine wipes contact fields, cancels tokens, invalidates the credential so sign-in fails, and logs field names only, never values.
+**Retention is six years (confirmed).** Evidence is excluded from GDPR erasure under the legal-claims exemption (Art. 17(3)(e)), structurally: the app's database role cannot delete it. Erasure wipes contact fields, cancels tokens, invalidates the credential so sign-in fails, and logs field names only, never values.
 
-**Found and fixed in self-audit:** an S3 lifecycle rule quietly deleting evidence at 550 days against the 6-year duty (S3 deletes it itself, so no app log would show it); two owner-level demo scripts able to destroy real attempts, now locked to demo data; a test approving a safe-place location leak as valid AI output, inverted; and two later migrations that had quietly dropped the build-without-locking rule.
+**Found and fixed in self-audit:** an S3 lifecycle rule deleting evidence at 550 days against the 6-year duty, invisible because S3 does it itself; two demo scripts able to destroy real attempts, now locked to demo data; a test approving a safe-place location leak as valid AI output, inverted; two later migrations that had dropped the build-without-locking rule.
 
 ## What breaks at 100x
 
-**Photos first**, projected rather than measured: signed links minted one at a time, and storage write limits per key path. Fix: batch the links, spread the keys, verify in background workers. **v1's full-history endpoint second:** unbounded by design for byte-compatibility, so statement timeouts are the first fix and retiring v1 is the real one. **Conflict review third:** the flag scales, the human process needs triage tools. **The pods summary:** a background job, or let it die with v1. **Not Postgres:** append-only inserts scale; split the table by month; move the database to its own box first.
+**Photos first**, projected rather than measured: signed links minted one at a time, and storage write limits per key path. Fix: batch the links, spread the keys, verify in background workers. **v1's full-history endpoint second:** unbounded by design for byte-compatibility, so statement timeouts are the first fix and retiring v1 is the real one. **Conflict review third:** the flag scales, the human process needs triage tools. **The pods summary:** a background job, or it dies with v1. **Not Postgres:** append-only inserts scale; split the table by month.
+
+**The database is not on the app box**, so the obvious first ceiling is already gone: it is an Aurora Serverless v2 cluster in private subnets, scaling on its own and backed up without anyone remembering to. The instance stores nothing and is disposable.
 
 ## Deliberately not built, and assumptions
 
-Office UI (client: read APIs, hit by curl). Conflict resolution workflow (sanctioned). Background sync: battery managers kill it, and the saved queue makes timing irrelevant. Day-list paging: a day is 120-180 stops, ~50KB, one fetch; paging adds offline failure modes to a non-problem. Edit or delete APIs on attempts: the absence is the feature. iOS, CI pipeline, push, route optimisation, admin CRUD. Offline map tiles: the offline promise is the work list; the map degrades honestly. Cross-day parcel history: a round is one day; redelivery is tomorrow's stop. Fleet-wide rate-limit counters (per identity, but counted per instance in memory). Pool phones beyond queue scoping: logout semantics would still need work.
+Office UI (client: read APIs, hit by curl). Conflict resolution workflow (sanctioned). Background sync: battery managers kill it, and the saved queue makes timing irrelevant. Day-list paging: a day is 120-180 stops, ~50KB, one fetch; paging adds offline failure modes to a non-problem. Edit or delete APIs on attempts: the absence is the feature. iOS, CI, push, route optimisation, admin CRUD. Offline map tiles: the offline promise is the work list; the map degrades honestly. Cross-day parcel history: a round is one day; redelivery is tomorrow's stop. Fleet-wide rate-limit counters (per identity, counted per instance in memory). Pool phones beyond queue scoping.
 
 ## AI tooling
 
-**Used throughout, most usefully as an adversary.** Review passes found real defects: a retry path that silenced a device for a day, and a committed Terraform plan leaking account details. Each verified against the code; several rejected.
+**Used throughout, most usefully as an adversary.** Reviews found real defects: a retry path that silenced a device for a day, a committed Terraform plan leaking account details, a reload path that would have destroyed evidence on a re-run. Several rejected.
 
-**Overrides.** IP-based rate limiting rejected: carriers put thousands of phones behind one IP, so sign-in is limited per account instead. A suggested "fix" that loosened a failing token test, rejected: the honest fix pinned the real rule: one live token, never a self-inflicted logout.
+**Running it still beat reading it.** That reviewed script then reported twelve tables loaded into an empty database: every `docker run -i` ate the shell's stdin, and the loop with it.
+
+**Overrides.** IP-based rate limiting rejected: carriers put thousands of phones behind one IP, so sign-in is limited per account. A "fix" loosening a failing token test, rejected: the rule is one live token, never a self-inflicted logout.

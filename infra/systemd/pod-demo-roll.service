@@ -1,17 +1,17 @@
 # Rolls the seeded demo round into the current day. Paired with
-# pod-demo-roll.timer. Install both with the line in infra/AURORA.md.
+# pod-demo-roll.timer. Install both with:
 #
-# WHY THIS FILE EXISTS AT ALL: the unit it replaces was written by hand on the
-# instance and ran
+#   sudo cp infra/systemd/pod-demo-roll.* /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now pod-demo-roll.timer
 #
-#   docker exec -i pod-v2-postgres-1 psql -U pod -d pod < roll-demo-route.sql
+# The round is selected by created_at >= date_trunc('day', now()), so a seeded
+# demo silently expires at UTC midnight and every driver login opens on an empty
+# day. This keeps it alive through the review window.
 #
-# which names the co-located container directly. That container does not stop
-# existing when the app moves to Aurora, it just stops being the database
-# anybody reads. The roll would have gone on succeeding every night, exit code
-# 0, against rows nobody serves, while the demo logins opened on an empty day.
-# A silent success is the worst failure mode available here, so the fix is to
-# stop naming a container and start following the app.
+# It takes the connection string from the deployed .env rather than naming a
+# host of its own. There is then one place that decides which database this
+# system talks to, and a roll can never end up succeeding, exit code 0, against
+# a database nobody reads. A silent success is the worst failure available here.
 
 [Unit]
 Description=Roll the seeded PoD demo round into the current day
@@ -30,52 +30,35 @@ Type=oneshot
 # the existing containers.
 WorkingDirectory=/home/ec2-user/pod-v2
 
-# The cutover-follows-the-app mechanism, in one line. deploy.sh renders .env
-# with whatever DB_HOST it was given, so reading DATABASE_OWNER_URL back out of
-# .env means this timer points wherever the last deploy pointed. There is no
-# second place to remember to update, and the revert (unset DB_HOST, redeploy)
-# brings the roll back with the app for free.
+# deploy.sh renders .env, so reading the connection string back out of it means
+# this timer always points at the database the last deploy configured. There is
+# no second place to remember to update.
 #
 # Deliberately no leading dash on the path: if .env is missing, fail loudly.
 # The alternative is an empty DATABASE_OWNER_URL, psql falling through to its
 # own libpq defaults, and a roll landing somewhere nobody chose.
 EnvironmentFile=/home/ec2-user/pod-v2/.env
 
-# psql comes out of the postgres:16-alpine image, which is already pulled on
-# this host because the co-located database runs from it. Nothing new gets
-# installed, and the client version keeps matching the server version.
+# psql comes out of the postgres:16-alpine image, matching the server major
+# version. It is a plain docker run rather than a compose service because the
+# deployed stack has no database container to borrow a client from.
 #
-# `compose run` rather than a bare `docker run` because it joins the compose
-# network without anyone hardcoding its generated name. That network is what
-# makes the hostname "postgres" resolve in the co-located case, and an Aurora
-# endpoint resolves and routes out of it just as well, so one command covers
-# both sides of the cutover and both sides of the revert.
+#   --rm      oneshot, leave no stopped container behind each night
+#   -i        the SQL is mounted, but psql still wants a usable stdin
+#   --volume  mount the SQL that this deploy shipped, read-only. The repo copy
+#             under backend/scripts is rsynced on every deploy, so it cannot
+#             drift the way a hand-placed copy in the home directory would.
 #
-#   --entrypoint psql   skip the image's server-bootstrap entrypoint
-#   --no-deps           never start a database that was deliberately left down
-#   --rm                oneshot, leave no stopped container behind each night
-#   -T                  systemd has no TTY to allocate
-#   --volume            mount the SQL that this deploy shipped, read-only. The
-#                       repo copy under backend/scripts is rsynced on every
-#                       deploy, so it cannot drift the way a hand-placed copy
-#                       in the home directory silently did.
-#
-# Long-form psql flags (--set, --quiet, --file) on purpose: everything after
-# the service name is the container's command, and long forms cannot be
-# misread as flags meant for compose itself.
-#
-# DATABASE_OWNER_URL, not DATABASE_URL: the previous unit connected as -U pod,
-# the owner role, and this preserves that exactly. The runtime role is held to
-# append-only grants and is not the right identity for a maintenance UPDATE.
+# DATABASE_OWNER_URL, not DATABASE_URL: the runtime role is held to append-only
+# grants and is not the right identity for a maintenance UPDATE.
 #
 # ${DATABASE_OWNER_URL} is deliberately unquoted. systemd expands the ${...}
 # form into exactly one argument, whitespace and all, which is the guarantee
 # wanted here. Shell-style double quotes would not add safety, only doubt about
 # whether expansion still happens inside them.
-ExecStart=/usr/bin/docker compose -f docker-compose.prod.yml --env-file .env \
-    run --rm --no-deps -T --entrypoint psql \
+ExecStart=/usr/bin/docker run --rm -i --env PGSSLMODE=require \
     --volume /home/ec2-user/pod-v2/backend/scripts/roll-demo-route.sql:/roll-demo-route.sql:ro \
-    postgres ${DATABASE_OWNER_URL} --set=ON_ERROR_STOP=1 --quiet --file=/roll-demo-route.sql
+    postgres:16-alpine psql ${DATABASE_OWNER_URL} --set=ON_ERROR_STOP=1 --quiet --file=/roll-demo-route.sql
 
 [Install]
 WantedBy=multi-user.target

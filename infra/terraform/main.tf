@@ -52,12 +52,9 @@ module "compute" {
   instance_type         = var.instance_type
   ssh_public_key        = var.ssh_public_key
   ssh_ingress_cidr      = var.ssh_ingress_cidr
-  db_ingress_cidr       = var.db_ingress_cidr
   instance_profile_name = module.iam.instance_profile_name
 }
 
-# The load-test runner holds no data and never needs a SQL client pointed at it,
-# so it does not inherit db_ingress_cidr.
 module "loadtest" {
   source = "./modules/compute"
   count  = var.enable_loadtest_runner ? 1 : 0
@@ -71,48 +68,41 @@ module "loadtest" {
 }
 
 # ---------------------------------------------------------------------------
-# Aurora. Off by default: the live database is still the Postgres container on
-# the app box, and an apply by anyone who has not opted in should change
-# nothing at all. Both lookups below are counted off alongside the module, so a
-# default apply does not even read them.
+# The database.
 # ---------------------------------------------------------------------------
 
 # The compute module owns the API host's security group and exposes no id
-# output for it, and that module is out of scope for this change, so the group
-# is resolved by the name compute builds. A literal sg- id pasted here would
-# survive exactly until the next time that instance is replaced.
+# output for it, so the group is resolved by the name compute builds. A literal
+# sg- id pasted here would survive exactly until the next time that instance is
+# replaced.
 data "aws_security_group" "app_host" {
-  count = var.enable_aurora ? 1 : 0
-
   name = "pod-v2-sg-host"
 }
 
-# Aurora reuses the POSTGRES_PASSWORD already in Secrets Manager, read live
-# rather than generated fresh. Two reasons.
+# The database password is read live from Secrets Manager rather than generated
+# here, so there is exactly one copy of it. deploy.sh renders
+# DATABASE_OWNER_URL from the same key, which means the cluster and the
+# application can never disagree about a credential.
 #
-# deploy.sh renders DATABASE_OWNER_URL from that same key, so cutover becomes a
-# change of host and nothing else, with no window where the rendered .env and
-# the secret disagree about a credential.
-#
-# And a new key cannot usefully be added to the secrets module: its
+# Note that a NEW key cannot usefully be added to the secrets module: its
 # aws_secretsmanager_secret_version carries lifecycle ignore_changes on
-# secret_string, so adding an AURORA_PASSWORD to that jsonencode would apply
-# cleanly, report no diff, and never reach the live secret. It would look like
-# it worked. Set var.aurora_master_password to use a separate credential.
+# secret_string, so adding one to that jsonencode would apply cleanly, report no
+# diff, and never reach the live secret. It would look like it worked. Set
+# var.aurora_master_password to use a separate credential instead.
 data "aws_secretsmanager_secret_version" "runtime" {
-  count = var.enable_aurora ? 1 : 0
-
   secret_id = module.secrets.secret_arn
 }
 
 module "database" {
   source = "./modules/database"
-  count  = var.enable_aurora ? 1 : 0
 
-  app_security_group_id = data.aws_security_group.app_host[0].id
+  app_security_group_id = data.aws_security_group.app_host.id
+
+  min_capacity = var.aurora_min_capacity
+  max_capacity = var.aurora_max_capacity
 
   master_password = coalesce(
     var.aurora_master_password,
-    jsondecode(data.aws_secretsmanager_secret_version.runtime[0].secret_string)["POSTGRES_PASSWORD"],
+    jsondecode(data.aws_secretsmanager_secret_version.runtime.secret_string)["POSTGRES_PASSWORD"],
   )
 }
