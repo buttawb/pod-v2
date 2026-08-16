@@ -2,13 +2,13 @@
   "expo": {
     "name": "PoD v2",
     "slug": "pod-v2",
-    "version": "2.0.0",
+    "version": "2.0.1",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "android": {
       "package": "com.podv2.driver",
-      "versionCode": 200,
+      "versionCode": 201,
       "allowBackup": false,
       "adaptiveIcon": {
         "backgroundColor": "#FFFFFF",

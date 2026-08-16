@@ -1,5 +1,39 @@
 # Release notes
 
+## 2.0.1 (versionCode 201)
+
+Fixes found by running two handsets against the live backend at the same time.
+
+### What's new (Play Console copy, 452 characters)
+
+```
+Fixes for drivers using more than one phone.
+
+A stop worked on another handset now shows on this one when you pull to
+refresh, and you can open it to see what was recorded and when. Pulling to
+refresh tells you if it could not reach the server instead of quietly showing
+the older copy.
+
+Both maps have been steadied. They open on your work and stay there, and the
+depot map opens across the whole coverage area with the stops grouped, so
+tapping a group zooms in on real stops.
+```
+
+### Detail
+
+- The stop list shows "On server" for evidence the server holds that this phone
+  never captured, which is what a second handset produces.
+- Opening one of those attempts shows what the server recorded rather than
+  reporting the attempt missing. The photographs stay on the server and the
+  screen says so.
+- Pull to refresh reports a failed fetch instead of silently falling back to the
+  phone's copy.
+- Neither map recentres itself any more. My route opens on the round, the depot
+  map opens on the depot at a zoom where stops are grouped, and both stay put
+  until the driver moves them.
+- Tapping a group no longer zooms past the point where individual stops appear,
+  which used to leave an empty map.
+
 ## 2.0.0 (versionCode 200)
 
 First Play release. Proof of Delivery v2 replaces the v1 driver app.
